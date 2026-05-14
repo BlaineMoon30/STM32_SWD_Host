@@ -40,6 +40,10 @@
 #define TARGET_RDP_ACTION_SET_L0    (2U)
 #define TARGET_RDP_ACTION           TARGET_RDP_ACTION_SET_L0
 
+#define TARGET_FAMILY_STM32F1       (0U)
+#define TARGET_FAMILY_STM32L0       (1U)
+#define TARGET_FAMILY               TARGET_FAMILY_STM32L0
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -155,6 +159,77 @@ static void SWD_Test(void)
 
 }
 
+static swd_host_status_t STM32L0_ChangeRdpLevel(uint32_t action)
+{
+  stm32l0_rdp_level_t l0_level;
+
+  if (action == TARGET_RDP_ACTION_NONE)
+  {
+    return SWD_HOST_OK;
+  }
+
+  if (stm32l0_get_rdp_level(&l0_level) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  if (action == TARGET_RDP_ACTION_SET_L1)
+  {
+    if (l0_level != STM32L0_RDP_LEVEL_0)
+    {
+      return SWD_HOST_ERROR;
+    }
+
+    return stm32l0_set_rdp_level(STM32L0_RDP_LEVEL_1);
+  }
+
+  if (action == TARGET_RDP_ACTION_SET_L0)
+  {
+    if (l0_level != STM32L0_RDP_LEVEL_1)
+    {
+      return SWD_HOST_ERROR;
+    }
+
+    return stm32l0_set_rdp_level(STM32L0_RDP_LEVEL_0);
+  }
+
+  return SWD_HOST_ERROR;
+}
+
+static void SWD_Test_L0(void)
+{
+  stm32l0_rdp_level_t l0_level;
+
+  if (swd_host_connect() != SWD_HOST_OK)
+  {
+    return;
+  }
+
+  HAL_Delay(TARGET_CONNECT_STABILIZE_MS);
+
+  if (stm32l0_get_rdp_level(&l0_level) != SWD_HOST_OK)
+  {
+    return;
+  }
+
+  /*
+   * STM32F1_ReadBlock is target-agnostic — it only uses swd_host_read_u32 —
+   * so it is safe to reuse here for the STM32L0 flash read.
+   */
+#if 0
+  if ((l0_level != STM32L0_RDP_LEVEL_1) &&
+      (STM32F1_ReadBlock(TARGET_FLASH_READ_ADDRESS, flash_data, TARGET_FLASH_READ_SIZE) != SWD_HOST_OK))
+  {
+    return;
+  }
+#endif
+
+  if (STM32L0_ChangeRdpLevel(TARGET_RDP_ACTION) != SWD_HOST_OK)
+  {
+    return;
+  }
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -198,7 +273,11 @@ int main(void)
     Error_Handler();
   }
 
+#if (TARGET_FAMILY == TARGET_FAMILY_STM32L0)
+  SWD_Test_L0();
+#else
   SWD_Test();
+#endif
   /* USER CODE END 2 */
 
   /* Infinite loop */

@@ -1,4 +1,5 @@
 #include "swd_host.h"
+#include "l0_ob_loader_blob.h"
 
 #define SWD_TURNAROUND_CYCLES                1U
 #define SWD_LINE_RESET_CYCLES                60U
@@ -42,10 +43,19 @@
 
 #define ARM_DEMCR                            0xE000EDFCUL
 #define ARM_DHCSR                            0xE000EDF0UL
+#define ARM_DCRSR                            0xE000EDF4UL
+#define ARM_DCRDR                            0xE000EDF8UL
 #define ARM_DEMCR_TRCENA                     (1UL << 24)
 #define ARM_DHCSR_DBGKEY                     0xA05F0000UL
 #define ARM_DHCSR_C_DEBUGEN                  (1UL << 0)
 #define ARM_DHCSR_C_HALT                     (1UL << 1)
+#define ARM_DHCSR_S_REGRDY                   (1UL << 16)
+#define ARM_DHCSR_S_HALT                     (1UL << 17)
+#define ARM_DCRSR_REGWnR                     (1UL << 16)
+#define ARM_CORE_REG_SP                      13U
+#define ARM_CORE_REG_PC                      15U
+#define ARM_CORE_REG_XPSR                    16U
+#define ARM_XPSR_THUMB                       (1UL << 24)
 
 #define STM32F1_FLASH_KEYR                   0x40022004UL
 #define STM32F1_FLASH_OPTKEYR                0x40022008UL
@@ -70,6 +80,43 @@
 #define STM32F1_OB_RDP_LEVEL2_VALUE          0x33CCU
 #define STM32F1_RDP_LEVEL1_TO_0_RESET_HOLD_MS      100U
 #define STM32F1_RDP_LEVEL1_TO_0_RELEASE_DELAY_MS   2000U
+
+/* STM32L0 flash interface — registers, keys, bits, option byte */
+#define STM32L0_FLASH_PECR                   0x40022004UL
+#define STM32L0_FLASH_PEKEYR                 0x4002200CUL
+#define STM32L0_FLASH_PRGKEYR                0x40022010UL
+#define STM32L0_FLASH_OPTKEYR                0x40022014UL
+#define STM32L0_FLASH_SR                     0x40022018UL
+#define STM32L0_FLASH_OBR                    0x4002201CUL
+
+#define STM32L0_FLASH_PEKEY1                 0x89ABCDEFUL
+#define STM32L0_FLASH_PEKEY2                 0x02030405UL
+#define STM32L0_FLASH_PRGKEY1                0x8C9DAEBFUL
+#define STM32L0_FLASH_PRGKEY2                0x13141516UL
+#define STM32L0_FLASH_OPTKEY1                0xFBEAD9C8UL
+#define STM32L0_FLASH_OPTKEY2                0x24252627UL
+
+#define STM32L0_FLASH_PECR_PELOCK            (1UL << 0)
+#define STM32L0_FLASH_PECR_PRGLOCK           (1UL << 1)
+#define STM32L0_FLASH_PECR_OPTLOCK           (1UL << 2)
+#define STM32L0_FLASH_PECR_PROG              (1UL << 3)
+#define STM32L0_FLASH_PECR_ERASE             (1UL << 9)
+#define STM32L0_FLASH_PECR_FPRG              (1UL << 10)
+#define STM32L0_FLASH_PECR_OBL_LAUNCH        (1UL << 18)
+
+#define STM32L0_FLASH_SR_BSY                 (1UL << 0)
+#define STM32L0_FLASH_SR_EOP                 (1UL << 1)
+#define STM32L0_FLASH_SR_WRPERR              (1UL << 8)
+#define STM32L0_FLASH_SR_PGAERR              (1UL << 9)
+#define STM32L0_FLASH_SR_SIZERR              (1UL << 10)
+#define STM32L0_FLASH_SR_OPTVERR             (1UL << 11)
+
+#define STM32L0_OB_RDP_ADDRESS               0x1FF80000UL
+#define STM32L0_OB_RDP_LEVEL0_BYTE           0xAAU
+#define STM32L0_OB_RDP_LEVEL1_BYTE           0xBBU
+#define STM32L0_OB_RDP_LEVEL2_BYTE           0xCCU
+#define STM32L0_RDP_LEVEL1_TO_0_RESET_HOLD_MS      100U
+#define STM32L0_RDP_LEVEL1_TO_0_RELEASE_DELAY_MS   2000U
 
 typedef struct
 {
@@ -128,6 +175,16 @@ static swd_host_status_t stm32f1_option_erase(void);
 static swd_host_status_t stm32f1_option_program_halfword(uint32_t address, uint16_t value);
 static swd_host_status_t stm32f1_reconnect_for_level1_access(void);
 static uint16_t stm32f1_get_rdp_halfword(stm32f1_rdp_level_t level);
+static swd_host_status_t stm32l0_flash_wait_ready(uint32_t timeout_ms);
+static swd_host_status_t stm32l0_pecr_unlock(void);
+static swd_host_status_t stm32l0_option_unlock(void);
+static swd_host_status_t stm32l0_clear_flash_status(void);
+static swd_host_status_t stm32l0_option_program_word(uint32_t address, uint32_t value);
+static swd_host_status_t stm32l0_reconnect_for_level1_access(void);
+static uint8_t stm32l0_get_rdp_byte(stm32l0_rdp_level_t level);
+static swd_host_status_t stm32l0_cpu_halt(uint32_t timeout_ms);
+static swd_host_status_t stm32l0_write_core_register(uint8_t regsel, uint32_t value);
+static swd_host_status_t stm32l0_run_ob_loader(uint32_t ob_word_value);
 static uint32_t swd_get_half_period_delay_cycles(void);
 static uint8_t swd_is_valid_speed(swd_host_speed_t speed);
 static uint8_t swd_is_valid_connect_mode(swd_host_connect_mode_t connect_mode);
@@ -702,6 +759,361 @@ static uint16_t stm32f1_get_rdp_halfword(stm32f1_rdp_level_t level)
   return STM32F1_OB_RDP_LEVEL2_VALUE;
 }
 
+static swd_host_status_t stm32l0_flash_wait_ready(uint32_t timeout_ms)
+{
+  uint32_t tickstart = HAL_GetTick();
+  uint32_t flash_sr;
+
+  do
+  {
+    if (swd_host_read_u32(STM32L0_FLASH_SR, &flash_sr) != SWD_HOST_OK)
+    {
+      return SWD_HOST_ERROR;
+    }
+
+    if ((flash_sr & STM32L0_FLASH_SR_BSY) == 0U)
+    {
+      if ((flash_sr & (STM32L0_FLASH_SR_WRPERR | STM32L0_FLASH_SR_PGAERR |
+                       STM32L0_FLASH_SR_SIZERR | STM32L0_FLASH_SR_OPTVERR)) != 0U)
+      {
+        return SWD_HOST_ERROR;
+      }
+
+      return SWD_HOST_OK;
+    }
+  } while ((HAL_GetTick() - tickstart) < timeout_ms);
+
+  return SWD_HOST_TIMEOUT;
+}
+
+static swd_host_status_t stm32l0_pecr_unlock(void)
+{
+  uint32_t flash_pecr;
+
+  if (swd_host_read_u32(STM32L0_FLASH_PECR, &flash_pecr) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  if ((flash_pecr & STM32L0_FLASH_PECR_PELOCK) == 0U)
+  {
+    return SWD_HOST_OK;
+  }
+
+  if (swd_host_write_u32(STM32L0_FLASH_PEKEYR, STM32L0_FLASH_PEKEY1) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  if (swd_host_write_u32(STM32L0_FLASH_PEKEYR, STM32L0_FLASH_PEKEY2) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  return SWD_HOST_OK;
+}
+
+static swd_host_status_t stm32l0_option_unlock(void)
+{
+  uint32_t flash_pecr;
+
+  if (swd_host_read_u32(STM32L0_FLASH_PECR, &flash_pecr) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  if ((flash_pecr & STM32L0_FLASH_PECR_OPTLOCK) == 0U)
+  {
+    return SWD_HOST_OK;
+  }
+
+  if (swd_host_write_u32(STM32L0_FLASH_OPTKEYR, STM32L0_FLASH_OPTKEY1) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  if (swd_host_write_u32(STM32L0_FLASH_OPTKEYR, STM32L0_FLASH_OPTKEY2) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  return SWD_HOST_OK;
+}
+
+static swd_host_status_t stm32l0_clear_flash_status(void)
+{
+  return swd_host_write_u32(STM32L0_FLASH_SR,
+                            STM32L0_FLASH_SR_EOP | STM32L0_FLASH_SR_WRPERR |
+                            STM32L0_FLASH_SR_PGAERR | STM32L0_FLASH_SR_SIZERR |
+                            STM32L0_FLASH_SR_OPTVERR);
+}
+
+static swd_host_status_t stm32l0_option_program_word(uint32_t address, uint32_t value)
+{
+  uint32_t flash_pecr;
+  uint32_t timeout_ms = 100U;
+
+  /*
+   * Programming RDP=0xAA (Level 0) triggers a flash mass erase on STM32L0,
+   * so allow much longer for completion just like the F1 path.
+   */
+  if ((address == STM32L0_OB_RDP_ADDRESS) &&
+      ((uint8_t)(value & 0xFFU) == STM32L0_OB_RDP_LEVEL0_BYTE))
+  {
+    timeout_ms = 3000U;
+  }
+
+  if (stm32l0_flash_wait_ready(100U) != SWD_HOST_OK)
+  {
+    return SWD_HOST_TIMEOUT;
+  }
+
+  if (stm32l0_clear_flash_status() != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  /* Erase the option byte word: set ERASE, write 0 to the OB address. */
+  if (swd_host_read_u32(STM32L0_FLASH_PECR, &flash_pecr) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  if (swd_host_write_u32(STM32L0_FLASH_PECR, flash_pecr | STM32L0_FLASH_PECR_ERASE) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  if (swd_host_write_u32(address, 0UL) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  if (stm32l0_flash_wait_ready(timeout_ms) != SWD_HOST_OK)
+  {
+    return SWD_HOST_TIMEOUT;
+  }
+
+  if (swd_host_write_u32(STM32L0_FLASH_PECR, flash_pecr & ~STM32L0_FLASH_PECR_ERASE) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  /* Program the new option byte word. FTDW handles the actual write. */
+  if (swd_host_write_u32(address, value) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  if (stm32l0_flash_wait_ready(timeout_ms) != SWD_HOST_OK)
+  {
+    return SWD_HOST_TIMEOUT;
+  }
+
+  if (stm32l0_clear_flash_status() != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  /*
+   * Trigger option byte reload via OBL_LAUNCH (PECR bit 18).
+   * The target generates its own NRST_OUT pulse and resets, so the SWD
+   * transaction that sets this bit typically fails to ACK — that is normal
+   * and not an error. Re-read PECR fresh in case ERASE was still set.
+   */
+  if (swd_host_read_u32(STM32L0_FLASH_PECR, &flash_pecr) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  (void)swd_host_write_u32(STM32L0_FLASH_PECR,
+                           (flash_pecr & ~STM32L0_FLASH_PECR_ERASE) | STM32L0_FLASH_PECR_OBL_LAUNCH);
+
+  return SWD_HOST_OK;
+}
+
+static swd_host_status_t stm32l0_reconnect_for_level1_access(void)
+{
+  swd_host_config_t saved_config = g_swd_host_config;
+  swd_host_status_t status;
+
+  g_swd_host_config.connect_mode = SWD_HOST_CONNECT_UNDER_RESET;
+  g_swd_host_config.speed = SWD_HOST_SPEED_VERY_LOW;
+
+  status = swd_host_connect();
+
+  g_swd_host_config = saved_config;
+  return status;
+}
+
+static uint8_t stm32l0_get_rdp_byte(stm32l0_rdp_level_t level)
+{
+  if (level == STM32L0_RDP_LEVEL_0)
+  {
+    return STM32L0_OB_RDP_LEVEL0_BYTE;
+  }
+
+  if (level == STM32L0_RDP_LEVEL_2)
+  {
+    return STM32L0_OB_RDP_LEVEL2_BYTE;
+  }
+
+  return STM32L0_OB_RDP_LEVEL1_BYTE;
+}
+
+static swd_host_status_t stm32l0_cpu_halt(uint32_t timeout_ms)
+{
+  uint32_t tickstart;
+  uint32_t dhcsr;
+
+  if (swd_host_write_u32(ARM_DHCSR,
+                         ARM_DHCSR_DBGKEY | ARM_DHCSR_C_DEBUGEN | ARM_DHCSR_C_HALT) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  tickstart = HAL_GetTick();
+  do
+  {
+    if (swd_host_read_u32(ARM_DHCSR, &dhcsr) != SWD_HOST_OK)
+    {
+      return SWD_HOST_ERROR;
+    }
+    if ((dhcsr & ARM_DHCSR_S_HALT) != 0U)
+    {
+      return SWD_HOST_OK;
+    }
+  } while ((HAL_GetTick() - tickstart) < timeout_ms);
+
+  return SWD_HOST_TIMEOUT;
+}
+
+static swd_host_status_t stm32l0_write_core_register(uint8_t regsel, uint32_t value)
+{
+  uint32_t tickstart;
+  uint32_t dhcsr;
+
+  if (swd_host_write_u32(ARM_DCRDR, value) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  if (swd_host_write_u32(ARM_DCRSR, ARM_DCRSR_REGWnR | (uint32_t)regsel) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  tickstart = HAL_GetTick();
+  do
+  {
+    if (swd_host_read_u32(ARM_DHCSR, &dhcsr) != SWD_HOST_OK)
+    {
+      return SWD_HOST_ERROR;
+    }
+    if ((dhcsr & ARM_DHCSR_S_REGRDY) != 0U)
+    {
+      return SWD_HOST_OK;
+    }
+  } while ((HAL_GetTick() - tickstart) < 100U);
+
+  return SWD_HOST_TIMEOUT;
+}
+
+/*
+ * Run the embedded mini flashloader on the target. The flashloader is the
+ * Thumb binary in l0_ob_loader_blob[] (built from flashloader/l0_ob_loader.c).
+ * It runs on the L0 CPU itself, which lets it write PEKEYR / OPTKEYR / OB
+ * as the native bus master — these writes are accepted under RDP Level 1,
+ * unlike MEM-AP debug-master writes.
+ *
+ * Flow on the target (mirrors ST-Link's flashloader pattern):
+ *   1. host halts the core via DHCSR.C_HALT
+ *   2. host uploads ~100 bytes of loader code to SRAM 0x20000000
+ *   3. host writes ob_word_value to 0x20000100 (loader reads it from there)
+ *   4. host sets SP / PC / xPSR via DCRSR+DCRDR
+ *   5. host releases C_HALT (resume)
+ *   6. CPU unlocks flash, programs OB, sets PECR.OBL_LAUNCH
+ *   7. OBL_LAUNCH triggers an internal chip reset; SWD breaks here, which
+ *      we detect as a failed DHCSR read — that is the success signal.
+ */
+static swd_host_status_t stm32l0_run_ob_loader(uint32_t ob_word_value)
+{
+  uint32_t offset;
+  uint32_t word;
+  uint32_t tickstart;
+  uint32_t dhcsr;
+
+  /* 1. halt the target CPU */
+  if (stm32l0_cpu_halt(100U) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  /* 2. upload the loader binary, 4 bytes at a time, little-endian */
+  for (offset = 0U; offset < L0_OB_LOADER_BLOB_SIZE; offset += 4U)
+  {
+    word =  (uint32_t)l0_ob_loader_blob[offset]
+         | ((uint32_t)l0_ob_loader_blob[offset + 1U] << 8)
+         | ((uint32_t)l0_ob_loader_blob[offset + 2U] << 16)
+         | ((uint32_t)l0_ob_loader_blob[offset + 3U] << 24);
+
+    if (swd_host_write_u32(L0_OB_LOADER_LOAD_ADDRESS + offset, word) != SWD_HOST_OK)
+    {
+      return SWD_HOST_ERROR;
+    }
+  }
+
+  /* 3. parameter: the 32-bit option byte word the loader will write to OB */
+  if (swd_host_write_u32(L0_OB_LOADER_PARAM_ADDRESS, ob_word_value) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  /* 4. set SP, PC, xPSR.T so the core resumes at the loader entry in Thumb mode */
+  if (stm32l0_write_core_register(ARM_CORE_REG_SP, L0_OB_LOADER_STACK_TOP) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+  if (stm32l0_write_core_register(ARM_CORE_REG_PC, L0_OB_LOADER_ENTRY_ADDRESS) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+  if (stm32l0_write_core_register(ARM_CORE_REG_XPSR, ARM_XPSR_THUMB) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  /* 5. release C_HALT to let the loader run */
+  if (swd_host_write_u32(ARM_DHCSR,
+                         ARM_DHCSR_DBGKEY | ARM_DHCSR_C_DEBUGEN) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  /*
+   * 6. wait for either:
+   *      - DHCSR read fails  : OBL_LAUNCH-induced chip reset broke SWD (success)
+   *      - DHCSR.S_HALT set  : loader hit BKPT (also success, reset just delayed)
+   *      - timeout
+   */
+  tickstart = HAL_GetTick();
+  for (;;)
+  {
+    if (swd_host_read_u32(ARM_DHCSR, &dhcsr) != SWD_HOST_OK)
+    {
+      return SWD_HOST_OK;
+    }
+    if ((dhcsr & ARM_DHCSR_S_HALT) != 0U)
+    {
+      return SWD_HOST_OK;
+    }
+    if ((HAL_GetTick() - tickstart) > 500U)
+    {
+      return SWD_HOST_TIMEOUT;
+    }
+  }
+}
+
 swd_host_status_t swd_host_init(void)
 {
   return swd_host_init_with_config(NULL);
@@ -1167,5 +1579,155 @@ swd_host_status_t stm32f1_set_rdp_level(stm32f1_rdp_level_t level)
     return SWD_HOST_ERROR;
   }
 
+  return SWD_HOST_OK;
+}
+
+swd_host_status_t stm32l0_read_u32(uint32_t address, uint32_t *value)
+{
+  swd_host_status_t status = swd_host_connect();
+
+  if (status != SWD_HOST_OK)
+  {
+    return status;
+  }
+
+  return swd_host_read_u32(address, value);
+}
+
+swd_host_status_t stm32l0_write_u32(uint32_t address, uint32_t value)
+{
+  swd_host_status_t status = swd_host_connect();
+
+  if (status != SWD_HOST_OK)
+  {
+    return status;
+  }
+
+  return swd_host_write_u32(address, value);
+}
+
+swd_host_status_t stm32l0_get_rdp_level(stm32l0_rdp_level_t *level)
+{
+  uint32_t obr;
+  uint8_t rdp_byte;
+  swd_host_status_t status;
+
+  if (level == NULL)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  status = swd_host_connect();
+  if (status != SWD_HOST_OK)
+  {
+    return status;
+  }
+
+  /*
+   * Read the *active* RDP byte from FLASH_OBR (0x4002201C), not the raw
+   * option-byte flash at 0x1FF80000. OBR reflects what the hardware
+   * actually loaded into the OB latches after the last system reset, so
+   * it is the ground truth — exactly what ST-Link queries in its captures.
+   * Reading raw OB flash can show "what we wrote" even when the OB
+   * verify failed and the chip is still at the previous RDP level.
+   */
+  status = swd_host_read_u32(STM32L0_FLASH_OBR, &obr);
+  if (status != SWD_HOST_OK)
+  {
+    /*
+     * If even OBR is unreadable, the SWD connection lost AP access; treat
+     * as "protected" so the caller can drive the L1 -> L0 recovery flow.
+     */
+    *level = STM32L0_RDP_LEVEL_1;
+    return SWD_HOST_OK;
+  }
+
+  rdp_byte = (uint8_t)(obr & 0xFFU);
+
+  if (rdp_byte == STM32L0_OB_RDP_LEVEL0_BYTE)
+  {
+    *level = STM32L0_RDP_LEVEL_0;
+  }
+  else if (rdp_byte == STM32L0_OB_RDP_LEVEL2_BYTE)
+  {
+    *level = STM32L0_RDP_LEVEL_2;
+  }
+  else
+  {
+    *level = STM32L0_RDP_LEVEL_1;
+  }
+
+  return SWD_HOST_OK;
+}
+
+swd_host_status_t stm32l0_set_rdp_level(stm32l0_rdp_level_t level)
+{
+  swd_host_status_t status;
+  stm32l0_rdp_level_t current_level;
+  uint8_t rdp_byte;
+  uint8_t user_byte = 0x00U;
+  uint32_t ob_word;
+  uint32_t settle_ms;
+
+  status = stm32l0_get_rdp_level(&current_level);
+  if (status != SWD_HOST_OK)
+  {
+    return status;
+  }
+
+  if (current_level == level)
+  {
+    return SWD_HOST_OK;
+  }
+
+  if (level == STM32L0_RDP_LEVEL_2)
+  {
+    return SWD_HOST_TARGET_LOCKED;
+  }
+
+  if (current_level == STM32L0_RDP_LEVEL_1)
+  {
+    status = stm32l0_reconnect_for_level1_access();
+    if (status != SWD_HOST_OK)
+    {
+      return status;
+    }
+  }
+
+  /*
+   * STM32L0 option byte word at 0x1FF80000 — halfword-complement layout
+   * (matches ST HAL's FLASH_OB_RDPConfig):
+   *   bits [15:0]  = data = (USER << 8) | RDP
+   *   bits [31:16] = ~data (16-bit complement, verified by hardware)
+   * Byte-wise complement is WRONG and gets rejected by the OB verify
+   * stage at OBL_LAUNCH, leaving the chip stuck at the previous RDP level.
+   * USER bits are written as factory default (0x00).
+   */
+  rdp_byte = stm32l0_get_rdp_byte(level);
+  {
+    uint16_t data = ((uint16_t)user_byte << 8) | (uint16_t)rdp_byte;
+    ob_word = ((uint32_t)(uint16_t)~data << 16) | (uint32_t)data;
+  }
+
+  /*
+   * Run the embedded mini flashloader on the target. It performs
+   *   PEKEYR unlock -> OPTKEYR unlock -> wait BSY -> write OB word -> wait BSY
+   *   -> PECR.OBL_LAUNCH = 1
+   * all from the L0 CPU itself (native bus master), then the chip resets.
+   */
+  status = stm32l0_run_ob_loader(ob_word);
+  if (status != SWD_HOST_OK)
+  {
+    return status;
+  }
+
+  /*
+   * OBL_LAUNCH already triggered the chip's internal NRST_OUT. Wait long
+   * enough for OB reload to complete. The L1 -> L0 path additionally
+   * mass-erases user flash, so allow significantly more time there.
+   */
+  settle_ms = (level == STM32L0_RDP_LEVEL_0) ? STM32L0_RDP_LEVEL1_TO_0_RELEASE_DELAY_MS : 100U;
+  HAL_Delay(settle_ms);
+  swd_host_disconnect();
   return SWD_HOST_OK;
 }
