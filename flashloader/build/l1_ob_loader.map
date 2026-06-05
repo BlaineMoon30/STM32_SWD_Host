@@ -1,7 +1,7 @@
 
 Discarded input sections
 
- .comment       0x00000000       0x44 C:\Users\grand\AppData\Local\Temp\ccLjoJQw.o
+ .comment       0x00000000       0x44 C:\Users\grand\AppData\Local\Temp\ccOR9428.o
 
 Memory Configuration
 
@@ -11,18 +11,18 @@ CODE             0x20000000         0x00000100         xr
 
 Linker script and memory map
 
-LOAD C:\Users\grand\AppData\Local\Temp\ccLjoJQw.o
+LOAD C:\Users\grand\AppData\Local\Temp\ccOR9428.o
 
 .loader         0x20000000       0x8c
  *(.loader_entry)
- .loader_entry  0x20000000       0x8c C:\Users\grand\AppData\Local\Temp\ccLjoJQw.o
-                0x20000000                l0_ob_loader_entry
+ .loader_entry  0x20000000       0x8c C:\Users\grand\AppData\Local\Temp\ccOR9428.o
+                0x20000000                l1_ob_loader_entry
  *(.text*)
- .text          0x2000008c        0x0 C:\Users\grand\AppData\Local\Temp\ccLjoJQw.o
+ .text          0x2000008c        0x0 C:\Users\grand\AppData\Local\Temp\ccOR9428.o
  *(.rodata*)
 
 .data           0x2000008c        0x0
- .data          0x2000008c        0x0 C:\Users\grand\AppData\Local\Temp\ccLjoJQw.o
+ .data          0x2000008c        0x0 C:\Users\grand\AppData\Local\Temp\ccOR9428.o
 
 .glue_7         0x2000008c        0x0
  .glue_7        0x2000008c        0x0 linker stubs
@@ -37,7 +37,7 @@ LOAD C:\Users\grand\AppData\Local\Temp\ccLjoJQw.o
  .v4_bx         0x2000008c        0x0 linker stubs
 
 .bss            0x2000008c        0x0
- .bss           0x2000008c        0x0 C:\Users\grand\AppData\Local\Temp\ccLjoJQw.o
+ .bss           0x2000008c        0x0 C:\Users\grand\AppData\Local\Temp\ccOR9428.o
 
 /DISCARD/
  *(.ARM.exidx*)
@@ -45,10 +45,10 @@ LOAD C:\Users\grand\AppData\Local\Temp\ccLjoJQw.o
  *(.eh_frame*)
  *(.comment)
  *(.note*)
-OUTPUT(build\l0_ob_loader.elf elf32-littlearm)
+OUTPUT(build\l1_ob_loader.elf elf32-littlearm)
 LOAD linker stubs
 
 .ARM.attributes
                 0x00000000       0x2c
  .ARM.attributes
-                0x00000000       0x2c C:\Users\grand\AppData\Local\Temp\ccLjoJQw.o
+                0x00000000       0x2c C:\Users\grand\AppData\Local\Temp\ccOR9428.o

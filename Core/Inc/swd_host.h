@@ -35,6 +35,27 @@ typedef enum
 
 typedef enum
 {
+  STM32G0_RDP_LEVEL_0 = 0,
+  STM32G0_RDP_LEVEL_1 = 1,
+  STM32G0_RDP_LEVEL_2 = 2
+} stm32g0_rdp_level_t;
+
+typedef enum
+{
+  STM32L1_RDP_LEVEL_0 = 0,
+  STM32L1_RDP_LEVEL_1 = 1,
+  STM32L1_RDP_LEVEL_2 = 2
+} stm32l1_rdp_level_t;
+
+typedef enum
+{
+  STM32G4_RDP_LEVEL_0 = 0,
+  STM32G4_RDP_LEVEL_1 = 1,
+  STM32G4_RDP_LEVEL_2 = 2
+} stm32g4_rdp_level_t;
+
+typedef enum
+{
   SWD_HOST_CONNECT_NORMAL = 0,
   SWD_HOST_CONNECT_UNDER_RESET = 1
 } swd_host_connect_mode_t;
@@ -81,6 +102,21 @@ swd_host_status_t stm32l0_read_u32(uint32_t address, uint32_t *value);
 swd_host_status_t stm32l0_write_u32(uint32_t address, uint32_t value);
 swd_host_status_t stm32l0_get_rdp_level(stm32l0_rdp_level_t *level);
 swd_host_status_t stm32l0_set_rdp_level(stm32l0_rdp_level_t level);
+
+swd_host_status_t stm32g0_read_u32(uint32_t address, uint32_t *value);
+swd_host_status_t stm32g0_write_u32(uint32_t address, uint32_t value);
+swd_host_status_t stm32g0_get_rdp_level(stm32g0_rdp_level_t *level);
+swd_host_status_t stm32g0_set_rdp_level(stm32g0_rdp_level_t level);
+
+swd_host_status_t stm32l1_read_u32(uint32_t address, uint32_t *value);
+swd_host_status_t stm32l1_write_u32(uint32_t address, uint32_t value);
+swd_host_status_t stm32l1_get_rdp_level(stm32l1_rdp_level_t *level);
+swd_host_status_t stm32l1_set_rdp_level(stm32l1_rdp_level_t level);
+
+swd_host_status_t stm32g4_read_u32(uint32_t address, uint32_t *value);
+swd_host_status_t stm32g4_write_u32(uint32_t address, uint32_t value);
+swd_host_status_t stm32g4_get_rdp_level(stm32g4_rdp_level_t *level);
+swd_host_status_t stm32g4_set_rdp_level(stm32g4_rdp_level_t level);
 
 #ifdef __cplusplus
 }

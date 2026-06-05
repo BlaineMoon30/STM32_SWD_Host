@@ -1,0 +1,67 @@
+
+build\g4_ob_loader.elf:     file format elf32-littlearm
+
+
+Disassembly of section .loader:
+
+20000000 <g4_ob_loader_entry>:
+20000000:	2380      	movs	r3, #128	@ 0x80
+20000002:	b510      	push	{r4, lr}
+20000004:	4a17      	ldr	r2, [pc, #92]	@ (20000064 <g4_ob_loader_entry+0x64>)
+20000006:	025b      	lsls	r3, r3, #9
+20000008:	6811      	ldr	r1, [r2, #0]
+2000000a:	4219      	tst	r1, r3
+2000000c:	d1fc      	bne.n	20000008 <g4_ob_loader_entry+0x8>
+2000000e:	4b16      	ldr	r3, [pc, #88]	@ (20000068 <g4_ob_loader_entry+0x68>)
+20000010:	4916      	ldr	r1, [pc, #88]	@ (2000006c <g4_ob_loader_entry+0x6c>)
+20000012:	6019      	str	r1, [r3, #0]
+20000014:	4916      	ldr	r1, [pc, #88]	@ (20000070 <g4_ob_loader_entry+0x70>)
+20000016:	6019      	str	r1, [r3, #0]
+20000018:	4b16      	ldr	r3, [pc, #88]	@ (20000074 <g4_ob_loader_entry+0x74>)
+2000001a:	4917      	ldr	r1, [pc, #92]	@ (20000078 <g4_ob_loader_entry+0x78>)
+2000001c:	6019      	str	r1, [r3, #0]
+2000001e:	4917      	ldr	r1, [pc, #92]	@ (2000007c <g4_ob_loader_entry+0x7c>)
+20000020:	6019      	str	r1, [r3, #0]
+20000022:	2380      	movs	r3, #128	@ 0x80
+20000024:	025b      	lsls	r3, r3, #9
+20000026:	6811      	ldr	r1, [r2, #0]
+20000028:	4219      	tst	r1, r3
+2000002a:	d1fc      	bne.n	20000026 <g4_ob_loader_entry+0x26>
+2000002c:	24ff      	movs	r4, #255	@ 0xff
+2000002e:	4814      	ldr	r0, [pc, #80]	@ (20000080 <g4_ob_loader_entry+0x80>)
+20000030:	4b14      	ldr	r3, [pc, #80]	@ (20000084 <g4_ob_loader_entry+0x84>)
+20000032:	6801      	ldr	r1, [r0, #0]
+20000034:	681b      	ldr	r3, [r3, #0]
+20000036:	43a1      	bics	r1, r4
+20000038:	4023      	ands	r3, r4
+2000003a:	430b      	orrs	r3, r1
+2000003c:	2180      	movs	r1, #128	@ 0x80
+2000003e:	6003      	str	r3, [r0, #0]
+20000040:	4b11      	ldr	r3, [pc, #68]	@ (20000088 <g4_ob_loader_entry+0x88>)
+20000042:	0289      	lsls	r1, r1, #10
+20000044:	6818      	ldr	r0, [r3, #0]
+20000046:	4301      	orrs	r1, r0
+20000048:	6019      	str	r1, [r3, #0]
+2000004a:	2180      	movs	r1, #128	@ 0x80
+2000004c:	0249      	lsls	r1, r1, #9
+2000004e:	6810      	ldr	r0, [r2, #0]
+20000050:	4208      	tst	r0, r1
+20000052:	d1fc      	bne.n	2000004e <g4_ob_loader_entry+0x4e>
+20000054:	2280      	movs	r2, #128	@ 0x80
+20000056:	6819      	ldr	r1, [r3, #0]
+20000058:	0512      	lsls	r2, r2, #20
+2000005a:	430a      	orrs	r2, r1
+2000005c:	601a      	str	r2, [r3, #0]
+2000005e:	be00      	bkpt	0x0000
+20000060:	e7fd      	b.n	2000005e <g4_ob_loader_entry+0x5e>
+20000062:	46c0      	nop			@ (mov r8, r8)
+20000064:	40022010 	.word	0x40022010
+20000068:	40022008 	.word	0x40022008
+2000006c:	45670123 	.word	0x45670123
+20000070:	cdef89ab 	.word	0xcdef89ab
+20000074:	4002200c 	.word	0x4002200c
+20000078:	08192a3b 	.word	0x08192a3b
+2000007c:	4c5d6e7f 	.word	0x4c5d6e7f
+20000080:	40022020 	.word	0x40022020
+20000084:	20000100 	.word	0x20000100
+20000088:	40022014 	.word	0x40022014

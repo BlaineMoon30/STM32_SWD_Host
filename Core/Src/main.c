@@ -42,7 +42,10 @@
 
 #define TARGET_FAMILY_STM32F1       (0U)
 #define TARGET_FAMILY_STM32L0       (1U)
-#define TARGET_FAMILY               TARGET_FAMILY_STM32L0
+#define TARGET_FAMILY_STM32G0       (2U)
+#define TARGET_FAMILY_STM32L1       (3U)
+#define TARGET_FAMILY_STM32G4       (4U)
+#define TARGET_FAMILY               TARGET_FAMILY_STM32L1
 
 /* USER CODE END PD */
 
@@ -230,6 +233,219 @@ static void SWD_Test_L0(void)
   }
 }
 
+static swd_host_status_t STM32G0_ChangeRdpLevel(uint32_t action)
+{
+  stm32g0_rdp_level_t g0_level;
+
+  if (action == TARGET_RDP_ACTION_NONE)
+  {
+    return SWD_HOST_OK;
+  }
+
+  if (stm32g0_get_rdp_level(&g0_level) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  if (action == TARGET_RDP_ACTION_SET_L1)
+  {
+    if (g0_level != STM32G0_RDP_LEVEL_0)
+    {
+      return SWD_HOST_ERROR;
+    }
+
+    return stm32g0_set_rdp_level(STM32G0_RDP_LEVEL_1);
+  }
+
+  if (action == TARGET_RDP_ACTION_SET_L0)
+  {
+    if (g0_level != STM32G0_RDP_LEVEL_1)
+    {
+      return SWD_HOST_ERROR;
+    }
+
+    return stm32g0_set_rdp_level(STM32G0_RDP_LEVEL_0);
+  }
+
+  return SWD_HOST_ERROR;
+}
+
+static void SWD_Test_G0(void)
+{
+  stm32g0_rdp_level_t g0_level;
+
+  if (swd_host_connect() != SWD_HOST_OK)
+  {
+    return;
+  }
+
+  HAL_Delay(TARGET_CONNECT_STABILIZE_MS);
+
+  if (stm32g0_get_rdp_level(&g0_level) != SWD_HOST_OK)
+  {
+    return;
+  }
+
+  /*
+   * STM32F1_ReadBlock is target-agnostic — it only uses swd_host_read_u32 —
+   * so it is safe to reuse here for the STM32G0 flash read.
+   */
+#if 0
+  if ((g0_level != STM32G0_RDP_LEVEL_1) &&
+      (STM32F1_ReadBlock(TARGET_FLASH_READ_ADDRESS, flash_data, TARGET_FLASH_READ_SIZE) != SWD_HOST_OK))
+  {
+    return;
+  }
+#endif
+
+  if (STM32G0_ChangeRdpLevel(TARGET_RDP_ACTION) != SWD_HOST_OK)
+  {
+    return;
+  }
+}
+
+static swd_host_status_t STM32L1_ChangeRdpLevel(uint32_t action)
+{
+  stm32l1_rdp_level_t l1_level;
+
+  if (action == TARGET_RDP_ACTION_NONE)
+  {
+    return SWD_HOST_OK;
+  }
+
+  if (stm32l1_get_rdp_level(&l1_level) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  if (action == TARGET_RDP_ACTION_SET_L1)
+  {
+    if (l1_level != STM32L1_RDP_LEVEL_0)
+    {
+      return SWD_HOST_ERROR;
+    }
+
+    return stm32l1_set_rdp_level(STM32L1_RDP_LEVEL_1);
+  }
+
+  if (action == TARGET_RDP_ACTION_SET_L0)
+  {
+    if (l1_level != STM32L1_RDP_LEVEL_1)
+    {
+      return SWD_HOST_ERROR;
+    }
+
+    return stm32l1_set_rdp_level(STM32L1_RDP_LEVEL_0);
+  }
+
+  return SWD_HOST_ERROR;
+}
+
+static void SWD_Test_L1(void)
+{
+  stm32l1_rdp_level_t l1_level;
+
+  if (swd_host_connect() != SWD_HOST_OK)
+  {
+    return;
+  }
+
+  HAL_Delay(TARGET_CONNECT_STABILIZE_MS);
+
+  if (stm32l1_get_rdp_level(&l1_level) != SWD_HOST_OK)
+  {
+    return;
+  }
+
+  /*
+   * STM32F1_ReadBlock is target-agnostic — it only uses swd_host_read_u32 —
+   * so it is safe to reuse here for the STM32L1 flash read.
+   */
+#if 0
+  if ((l1_level != STM32L1_RDP_LEVEL_1) &&
+      (STM32F1_ReadBlock(TARGET_FLASH_READ_ADDRESS, flash_data, TARGET_FLASH_READ_SIZE) != SWD_HOST_OK))
+  {
+    return;
+  }
+#endif
+
+  if (STM32L1_ChangeRdpLevel(TARGET_RDP_ACTION) != SWD_HOST_OK)
+  {
+    return;
+  }
+}
+
+static swd_host_status_t STM32G4_ChangeRdpLevel(uint32_t action)
+{
+  stm32g4_rdp_level_t g4_level;
+
+  if (action == TARGET_RDP_ACTION_NONE)
+  {
+    return SWD_HOST_OK;
+  }
+
+  if (stm32g4_get_rdp_level(&g4_level) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  if (action == TARGET_RDP_ACTION_SET_L1)
+  {
+    if (g4_level != STM32G4_RDP_LEVEL_0)
+    {
+      return SWD_HOST_ERROR;
+    }
+
+    return stm32g4_set_rdp_level(STM32G4_RDP_LEVEL_1);
+  }
+
+  if (action == TARGET_RDP_ACTION_SET_L0)
+  {
+    if (g4_level != STM32G4_RDP_LEVEL_1)
+    {
+      return SWD_HOST_ERROR;
+    }
+
+    return stm32g4_set_rdp_level(STM32G4_RDP_LEVEL_0);
+  }
+
+  return SWD_HOST_ERROR;
+}
+
+static void SWD_Test_G4(void)
+{
+  stm32g4_rdp_level_t g4_level;
+
+  if (swd_host_connect() != SWD_HOST_OK)
+  {
+    return;
+  }
+
+  HAL_Delay(TARGET_CONNECT_STABILIZE_MS);
+
+  if (stm32g4_get_rdp_level(&g4_level) != SWD_HOST_OK)
+  {
+    return;
+  }
+
+  /*
+   * STM32F1_ReadBlock is target-agnostic — it only uses swd_host_read_u32 —
+   * so it is safe to reuse here for the STM32G4 flash read.
+   */
+#if 0
+  if ((g4_level != STM32G4_RDP_LEVEL_1) &&
+      (STM32F1_ReadBlock(TARGET_FLASH_READ_ADDRESS, flash_data, TARGET_FLASH_READ_SIZE) != SWD_HOST_OK))
+  {
+    return;
+  }
+#endif
+
+  if (STM32G4_ChangeRdpLevel(TARGET_RDP_ACTION) != SWD_HOST_OK)
+  {
+    return;
+  }
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -275,6 +491,12 @@ int main(void)
 
 #if (TARGET_FAMILY == TARGET_FAMILY_STM32L0)
   SWD_Test_L0();
+#elif (TARGET_FAMILY == TARGET_FAMILY_STM32G0)
+  SWD_Test_G0();
+#elif (TARGET_FAMILY == TARGET_FAMILY_STM32L1)
+  SWD_Test_L1();
+#elif (TARGET_FAMILY == TARGET_FAMILY_STM32G4)
+  SWD_Test_G4();
 #else
   SWD_Test();
 #endif

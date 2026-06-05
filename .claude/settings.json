@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/ST/STM32CubeCLT/GNU-tools-for-STM32/bin/**)",
+      "Read(//c/ST/**)",
+      "Bash(\"/c/ST/STM32CubeCLT_1.21.0/GNU-tools-for-STM32/bin/arm-none-eabi-gcc\" --version)",
+      "Bash(python -c \"print\\('py-ok', 2+2\\)\")",
+      "Bash(py --version)",
+      "PowerShell(cmd /c \"build.bat\" 2>&1)",
+      "PowerShell(cmd /c \"cd /d d:\\\\Disty\\\\Zion_SWD_G0\\\\STM32_SWD_Host\\\\flashloader && build.bat\" 2>&1)",
+      "PowerShell(cmd /c \"cd /d d:\\\\Disty\\\\Zion_SWD_G0\\\\STM32_SWD_Host\\\\flashloader && call build.bat\")",
+      "PowerShell(cmd /c \"d:\\\\Disty\\\\Zion_SWD_G0\\\\STM32_SWD_Host\\\\flashloader\\\\build.bat\")",
+      "PowerShell(cmd /c \"pushd d:\\\\Disty\\\\Zion_SWD_G0\\\\STM32_SWD_Host\\\\flashloader & build.bat & popd\")",
+      "PowerShell(cmd /c \"cd /d d:\\\\Disty\\\\Zion_SWD_G0\\\\STM32_SWD_Host\\\\flashloader && d:\\\\Disty\\\\Zion_SWD_G0\\\\STM32_SWD_Host\\\\flashloader\\\\build.bat\")",
+      "Read(//c/Users/grand/STM32Cube/Repository/**)",
+      "Bash(awk '/} FLASH_TypeDef;/{found=1} /typedef struct/{buf=\"\"} {buf=buf\"\\\\n\"$0} found{print buf; exit}' /c/Users/grand/STM32Cube/Repository/STM32Cube_FW_G4_V1.6.1/Drivers/CMSIS/Device/ST/STM32G4xx/Include/stm32g431xx.h)",
+      "Bash(awk '/^typedef struct/{s=NR; buf=$0; next} {buf=buf\"\\\\n\"$0} /} FLASH_TypeDef;/{print buf; exit}' /c/Users/grand/STM32Cube/Repository/Packs/STMicroelectronics/X-CUBE-MEMS1/11.3.0/Drivers/CMSIS/Device/ST/STM32L1xx/Include/stm32l151xb.h)",
+      "Bash(awk '/^typedef struct/{buf=$0; cap=1; next} cap{buf=buf\"\\\\n\"$0} /} OB_TypeDef;/{print buf; exit}' /c/Users/grand/STM32Cube/Repository/Packs/STMicroelectronics/X-CUBE-MEMS1/11.3.0/Drivers/CMSIS/Device/ST/STM32L1xx/Include/stm32l151xb.h)",
+      "Bash(awk '/^static HAL_StatusTypeDef FLASH_OB_RDPConfig\\\\\\(uint8_t OB_RDP\\\\\\)/{f=1} f{print} f&&/^}/{exit}' /c/Users/grand/STM32Cube/Repository/STM32Cube_FW_L1_V1.10.6/Drivers/STM32L1xx_HAL_Driver/Src/stm32l1xx_hal_flash_ex.c)",
+      "Bash(xxd)",
+      "PowerShell($p=\"d:\\\\Disty\\\\Zion_SWD_G0\\\\STM32_SWD_Host\\\\flashloader\\\\build.bat\"; $t=[IO.File]::ReadAllText\\($p\\); $t=$t -replace \"`r`n\",\"`n\" -replace \"`n\",\"`r`n\"; [IO.File]::WriteAllText\\($p,$t\\); \"converted to CRLF\")"
+    ]
+  }
+}
