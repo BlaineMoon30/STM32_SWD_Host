@@ -1,13 +1,14 @@
-# STM32G0 SWD Host for STM32F103
+# STM32 Multi-Target SWD Host
 
-This repository contains an STM32G0-based SWD host example that talks to an STM32F103 target through bit-banged SWD.
+This repository contains an STM32G0-based SWD host that talks to a range of
+STM32 targets through bit-banged SWD. It started as an STM32F103-only example
+and now drives the Read-Out Protection (RDP) option byte on five families.
 
-The project was tuned against real ST-LINK logic captures and now supports:
+The project was tuned against real ST-LINK logic captures and supports:
 
 - Stable SWD connect and memory read
 - Reading 64 bytes from `0x08000000`
-- STM32F103 RDP Level `0 -> 1`
-- STM32F103 RDP Level `1 -> 0`
+- STM32F1 RDP Level `0 -> 1` / `1 -> 0` (direct over the debug MEM-AP)
 - STM32L0 RDP Level `0 -> 1` / `1 -> 0` (via on-target option-byte flashloader)
 - STM32L1 RDP Level `0 -> 1` / `1 -> 0` (via on-target option-byte flashloader)
 - STM32G0 RDP Level `0 -> 1` / `1 -> 0` (via on-target option-byte flashloader)
@@ -15,14 +16,18 @@ The project was tuned against real ST-LINK logic captures and now supports:
 
 ## Project Layout
 
-- `STM32G0_SWD_Host/`
-  Main STM32CubeIDE project
+- `STM32_SWD_Host/`
+  Main STM32CubeIDE project (this directory)
+- `flashloader/`
+  Sources, linker scripts and build tooling for the on-target option-byte
+  loaders, plus the generated `build/` artifacts
 
 Important source files:
 
-- `STM32G0_SWD_Host/Core/Src/swd_host.c`
-- `STM32G0_SWD_Host/Core/Inc/swd_host.h`
-- `STM32G0_SWD_Host/Core/Src/main.c`
+- `Core/Src/swd_host.c`  — SWD engine + per-family RDP logic
+- `Core/Inc/swd_host.h`  — public API
+- `Core/Src/main.c`      — per-family example entry points
+- `Core/Inc/*_ob_loader_blob.h` — generated loader blobs consumed by `swd_host.c`
 
 ## Hardware Setup
 
@@ -32,7 +37,7 @@ Host MCU:
 
 Target MCU:
 
-- STM32F103
+- STM32F1 / STM32L0 / STM32L1 / STM32G0 / STM32G4
 
 Main signal mapping:
 
@@ -41,43 +46,132 @@ Main signal mapping:
 - `PA4` -> target `nRESET`
 - Common `GND`
 
-## Current Example Behavior
+## Public API
 
-The example in `main.c` does the following:
+All functions are declared in `Core/Inc/swd_host.h` and return
+`swd_host_status_t` (`SWD_HOST_OK` on success).
 
-1. Connects to the STM32F103 target over SWD
-2. Waits for the target to stabilize
-3. Reads 64 bytes starting at `0x08000000`
-4. Optionally changes the RDP level
+Host / transport:
 
-The read buffer is:
+```c
+swd_host_status_t swd_host_init(void);
+swd_host_status_t swd_host_init_with_config(const swd_host_config_t *config);
+swd_host_status_t swd_host_configure(const swd_host_config_t *config);
+void              swd_host_get_config(swd_host_config_t *config);
+swd_host_status_t swd_host_set_connect_mode(swd_host_connect_mode_t connect_mode);
+swd_host_status_t swd_host_set_speed(swd_host_speed_t speed);
+swd_host_status_t swd_host_connect(void);
+void              swd_host_disconnect(void);
 
-- `flash_data[64]`
+swd_host_status_t swd_host_read_u8 (uint32_t address, uint8_t  *value);
+swd_host_status_t swd_host_read_u16(uint32_t address, uint16_t *value);
+swd_host_status_t swd_host_read_u32(uint32_t address, uint32_t *value);
+swd_host_status_t swd_host_write_u8 (uint32_t address, uint8_t  value);
+swd_host_status_t swd_host_write_u16(uint32_t address, uint16_t value);
+swd_host_status_t swd_host_write_u32(uint32_t address, uint32_t value);
+```
 
-## RDP Control
+Per-family helpers (one set each for `stm32f1` / `stm32l0` / `stm32l1` /
+`stm32g0` / `stm32g4`):
 
-RDP behavior is controlled in `STM32G0_SWD_Host/Core/Src/main.c` with:
+```c
+swd_host_status_t stm32XX_read_u32 (uint32_t address, uint32_t *value);
+swd_host_status_t stm32XX_write_u32(uint32_t address, uint32_t value);
+swd_host_status_t stm32XX_get_rdp_level(stm32XX_rdp_level_t *level);
+swd_host_status_t stm32XX_set_rdp_level(stm32XX_rdp_level_t  level);
+```
+
+RDP levels are `STM32XX_RDP_LEVEL_0 / _1 / _2`.
+
+## Connect Mode and Speed
+
+The host is configured with `swd_host_config_t`:
+
+```c
+swd_host_config_t swd_config =
+{
+  SWD_HOST_CONNECT_NORMAL,   /* or SWD_HOST_CONNECT_UNDER_RESET */
+  SWD_HOST_SPEED_VERY_LOW
+};
+swd_host_init_with_config(&swd_config);
+```
+
+Connect modes:
+
+- `SWD_HOST_CONNECT_NORMAL`
+- `SWD_HOST_CONNECT_UNDER_RESET`
+
+Speed presets:
+
+- `SWD_HOST_SPEED_VERY_LOW`
+- `SWD_HOST_SPEED_LOW`
+- `SWD_HOST_SPEED_MEDIUM`
+- `SWD_HOST_SPEED_HIGH`
+- `SWD_HOST_SPEED_VERY_HIGH`
+
+Mode and speed can also be changed at runtime with
+`swd_host_set_connect_mode()` / `swd_host_set_speed()` before a (re)connect.
+
+## Example Behavior
+
+`main.c` selects one per-family test routine at compile time and runs it once
+after init:
+
+| Family | Macro | Routine |
+|--------|-------|---------|
+| STM32F1 | `TARGET_FAMILY_STM32F1` | `SWD_Test()` |
+| STM32L0 | `TARGET_FAMILY_STM32L0` | `SWD_Test_L0()` |
+| STM32G0 | `TARGET_FAMILY_STM32G0` | `SWD_Test_G0()` |
+| STM32L1 | `TARGET_FAMILY_STM32L1` | `SWD_Test_L1()` |
+| STM32G4 | `TARGET_FAMILY_STM32G4` | `SWD_Test_G4()` |
+
+Each routine:
+
+1. Connects to the target over SWD
+2. Waits `TARGET_CONNECT_STABILIZE_MS` for the target to stabilize
+3. Reads the current RDP level
+4. Reads 64 bytes from `0x08000000` into `flash_data[64]`
+   (STM32F1 path; the read is left `#if 0`-disabled in the L0/L1/G0/G4 paths so
+   the loader sequence can be exercised on its own — re-enable it if you want a
+   read on those families)
+5. Optionally changes the RDP level per `TARGET_RDP_ACTION`
+
+## Selecting Family and RDP Action
+
+Both selections live in `Core/Src/main.c`.
+
+Target family:
+
+```c
+#define TARGET_FAMILY_STM32F1       (0U)
+#define TARGET_FAMILY_STM32L0       (1U)
+#define TARGET_FAMILY_STM32G0       (2U)
+#define TARGET_FAMILY_STM32L1       (3U)
+#define TARGET_FAMILY_STM32G4       (4U)
+#define TARGET_FAMILY               TARGET_FAMILY_STM32L1
+```
+
+RDP action:
 
 ```c
 #define TARGET_RDP_ACTION_NONE      (0U)
 #define TARGET_RDP_ACTION_SET_L1    (1U)
 #define TARGET_RDP_ACTION_SET_L0    (2U)
-#define TARGET_RDP_ACTION           TARGET_RDP_ACTION_NONE
+#define TARGET_RDP_ACTION           TARGET_RDP_ACTION_SET_L0
 ```
 
-Use:
+- `TARGET_RDP_ACTION_NONE`   — no RDP change (read only)
+- `TARGET_RDP_ACTION_SET_L1` — Level 0 -> Level 1 (lock)
+- `TARGET_RDP_ACTION_SET_L0` — Level 1 -> Level 0 (unlock, triggers mass erase)
 
-- `TARGET_RDP_ACTION_NONE`
-  No RDP change
-- `TARGET_RDP_ACTION_SET_L1`
-  Change STM32F103 from RDP Level 0 to Level 1
-- `TARGET_RDP_ACTION_SET_L0`
-  Change STM32F103 from RDP Level 1 to Level 0
+Each `..._ChangeRdpLevel()` first reads the current level and refuses the action
+if the target is not in the expected starting level.
 
 Notes:
 
-- `Level 1 -> Level 0` triggers a target flash mass erase on STM32F103
-- `Level 1 -> Level 0` requires a more conservative reconnect sequence than normal memory access
+- `Level 1 -> Level 0` triggers a target flash mass erase on every family
+- `Level 1 -> Level 0` requires a more conservative reconnect sequence than
+  normal memory access
 
 ## STM32L0 / L1 / G0 / G4 RDP Control
 
@@ -94,27 +188,18 @@ Loader sources live in `flashloader/`:
 - `g0_ob_loader.c` -> `Core/Inc/g0_ob_loader_blob.h`
 - `g4_ob_loader.c` -> `Core/Inc/g4_ob_loader_blob.h`
 
-Rebuild the blobs with `flashloader/build.bat` (needs `arm-none-eabi-gcc` from
-STM32CubeCLT on PATH or the path set in the script).
+Rebuild all four blobs with `flashloader/build.bat` (needs `arm-none-eabi-gcc`
+from STM32CubeCLT on PATH or the path set at the top of the script). The script
+compiles each loader, objcopies to `.bin`, dumps a `.dis`, and runs
+`emit_blob_header.py` to regenerate the matching `Core/Inc/*_ob_loader_blob.h`.
 
-Select the target family in `Core/Src/main.c`:
-
-```c
-#define TARGET_FAMILY_STM32F1       (0U)
-#define TARGET_FAMILY_STM32L0       (1U)
-#define TARGET_FAMILY_STM32G0       (2U)
-#define TARGET_FAMILY_STM32L1       (3U)
-#define TARGET_FAMILY_STM32G4       (4U)
-#define TARGET_FAMILY               TARGET_FAMILY_STM32G0
-```
-
-Then drive RDP with `TARGET_RDP_ACTION` (`NONE` / `SET_L1` / `SET_L0`), as for
-the STM32F1 path.
+The STM32F1 path is the exception: it programs the option bytes directly over
+the MEM-AP and needs no loader blob.
 
 ### Two flash-controller generations
 
-The four families split into two flash IP generations, which is why there are
-two loader styles:
+The four loader families split into two flash IP generations, which is why
+there are two loader styles:
 
 | Family | Flash IP | Register base | RDP location | `SR.BSY` | Commit / reload |
 |--------|----------|---------------|--------------|----------|-----------------|
@@ -155,23 +240,27 @@ The working implementation depends on a few important behaviors in `swd_host.c`:
 
 ## Why the RDP Level 1 -> 0 Path Needed Special Handling
 
-Normal SWD memory access can succeed while flash register access still fails under RDP Level 1.
+Normal SWD memory access can succeed while flash register access still fails
+under RDP Level 1.
 
 The final working solution was to reconnect using:
 
 - `SWD_HOST_CONNECT_UNDER_RESET`
 - `SWD_HOST_SPEED_VERY_LOW`
 
-before unlocking the STM32F103 flash interface for the RDP regression sequence.
+before unlocking the target's flash interface for the RDP regression sequence.
 
-## Default State
+## Default / Safe Configuration
 
-The repository is left in a safe default configuration:
+`TARGET_RDP_ACTION` and `TARGET_FAMILY` are set in `main.c` for whatever target
+is currently being exercised. For a non-destructive run, set:
 
-- 64-byte flash read enabled
-- RDP change disabled by default
+```c
+#define TARGET_RDP_ACTION           TARGET_RDP_ACTION_NONE
+```
 
-To test RDP operations, change `TARGET_RDP_ACTION` explicitly before building.
+so the example only connects and reads, with no option-byte write or mass
+erase. Choose `SET_L1` / `SET_L0` explicitly when you intend to change RDP.
 
 ## Status
 
@@ -179,6 +268,5 @@ Validated behaviors:
 
 - SWD connect
 - Flash read from `0x08000000`
-- RDP Level 0 to Level 1
-- RDP Level 1 to Level 0
-
+- RDP Level 0 -> Level 1 (F1 / L0 / L1 / G0 / G4)
+- RDP Level 1 -> Level 0 (F1 / L0 / L1 / G0 / G4)
