@@ -13,6 +13,9 @@ The project was tuned against real ST-LINK logic captures and supports:
 - STM32L1 RDP Level `0 -> 1` / `1 -> 0` (via on-target option-byte flashloader)
 - STM32G0 RDP Level `0 -> 1` / `1 -> 0` (via on-target option-byte flashloader)
 - STM32G4 RDP Level `0 -> 1` / `1 -> 0` (via on-target option-byte flashloader)
+- STM32F0 RDP Level `0 -> 1` / `1 -> 0` (via on-target option-byte flashloader)
+- STM32U0 RDP Level `0 -> 1` / `1 -> 0` (via on-target option-byte flashloader)
+- STM32L4 RDP Level `0 -> 1` / `1 -> 0` (via on-target option-byte flashloader)
 
 ## Project Layout
 
@@ -37,7 +40,7 @@ Host MCU:
 
 Target MCU:
 
-- STM32F1 / STM32L0 / STM32L1 / STM32G0 / STM32G4
+- STM32F1 / STM32L0 / STM32L1 / STM32G0 / STM32G4 / STM32F0 / STM32U0 / STM32L4
 
 Main signal mapping:
 
@@ -72,7 +75,7 @@ swd_host_status_t swd_host_write_u32(uint32_t address, uint32_t value);
 ```
 
 Per-family helpers (one set each for `stm32f1` / `stm32l0` / `stm32l1` /
-`stm32g0` / `stm32g4`):
+`stm32g0` / `stm32g4` / `stm32f0` / `stm32u0` / `stm32l4`):
 
 ```c
 swd_host_status_t stm32XX_read_u32 (uint32_t address, uint32_t *value);
@@ -124,6 +127,9 @@ after init:
 | STM32G0 | `TARGET_FAMILY_STM32G0` | `SWD_Test_G0()` |
 | STM32L1 | `TARGET_FAMILY_STM32L1` | `SWD_Test_L1()` |
 | STM32G4 | `TARGET_FAMILY_STM32G4` | `SWD_Test_G4()` |
+| STM32F0 | `TARGET_FAMILY_STM32F0` | `SWD_Test_F0()` |
+| STM32U0 | `TARGET_FAMILY_STM32U0` | `SWD_Test_U0()` |
+| STM32L4 | `TARGET_FAMILY_STM32L4` | `SWD_Test_L4()` |
 
 Each routine:
 
@@ -148,6 +154,9 @@ Target family:
 #define TARGET_FAMILY_STM32G0       (2U)
 #define TARGET_FAMILY_STM32L1       (3U)
 #define TARGET_FAMILY_STM32G4       (4U)
+#define TARGET_FAMILY_STM32F0       (5U)
+#define TARGET_FAMILY_STM32U0       (6U)
+#define TARGET_FAMILY_STM32L4       (7U)
 #define TARGET_FAMILY               TARGET_FAMILY_STM32L1
 ```
 
@@ -173,7 +182,7 @@ Notes:
 - `Level 1 -> Level 0` requires a more conservative reconnect sequence than
   normal memory access
 
-## STM32L0 / L1 / G0 / G4 RDP Control
+## STM32L0 / L1 / G0 / G4 / F0 / U0 / L4 RDP Control
 
 These families do not allow the RDP option byte to be flipped over the debug
 MEM-AP while the target is under RDP Level 1. Instead, the host uploads a tiny
@@ -187,8 +196,11 @@ Loader sources live in `flashloader/`:
 - `l1_ob_loader.c` -> `Core/Inc/l1_ob_loader_blob.h`
 - `g0_ob_loader.c` -> `Core/Inc/g0_ob_loader_blob.h`
 - `g4_ob_loader.c` -> `Core/Inc/g4_ob_loader_blob.h`
+- `f0_ob_loader.c` -> `Core/Inc/f0_ob_loader_blob.h`
+- `u0_ob_loader.c` -> `Core/Inc/u0_ob_loader_blob.h`
+- `l4_ob_loader.c` -> `Core/Inc/l4_ob_loader_blob.h`
 
-Rebuild all four blobs with `flashloader/build.bat` (needs `arm-none-eabi-gcc`
+Rebuild all seven blobs with `flashloader/build.bat` (needs `arm-none-eabi-gcc`
 from STM32CubeCLT on PATH or the path set at the top of the script). The script
 compiles each loader, objcopies to `.bin`, dumps a `.dis`, and runs
 `emit_blob_header.py` to regenerate the matching `Core/Inc/*_ob_loader_blob.h`.
@@ -196,10 +208,10 @@ compiles each loader, objcopies to `.bin`, dumps a `.dis`, and runs
 The STM32F1 path is the exception: it programs the option bytes directly over
 the MEM-AP and needs no loader blob.
 
-### Two flash-controller generations
+### Three flash-controller generations
 
-The four loader families split into two flash IP generations, which is why
-there are two loader styles:
+The loader families split into three flash IP generations, which is why there
+are three loader styles:
 
 | Family | Flash IP | Register base | RDP location | `SR.BSY` | Commit / reload |
 |--------|----------|---------------|--------------|----------|-----------------|
@@ -207,23 +219,39 @@ there are two loader styles:
 | L1 | EEPROM / `PECR` | `0x40023C00` | OB word @ `0x1FF80000` | bit 0 | write OB word, `PECR.OBL_LAUNCH` |
 | G0 | G4/L4/WB-style | `0x40022000` | `FLASH_OPTR[7:0]` | bit 16 | `CR.OPTSTRT`, `CR.OBL_LAUNCH` |
 | G4 | G4/L4/WB-style | `0x40022000` | `FLASH_OPTR[7:0]` | bit 16 | `CR.OPTSTRT`, `CR.OBL_LAUNCH` |
+| U0 | G4/L4/WB-style | `0x40022000` | `FLASH_OPTR[7:0]` | bit 16 | `CR.OPTSTRT`, `CR.OBL_LAUNCH` |
+| L4 | G4/L4/WB-style | `0x40022000` | `FLASH_OPTR[7:0]` | bit 16 | `CR.OPTSTRT`, `CR.OBL_LAUNCH` |
+| F0 | FPEC (F1-style) | `0x40022000` | OB halfword @ `0x1FFFF800` | bit 0 | program OB, `CR.OBL_LAUNCH` |
 
 - **L1 == L0** except the flash register base (`0x40023C00` vs `0x40022000`).
   Keys, `PECR`/`SR` bits, the option-byte block at `0x1FF80000`, and the 16-bit
   halfword-complement RDP word format (`(~RDP << 16) | RDP`) are all identical.
-- **G4 == G0** — the flash IP (base, register offsets, keys, `OPTR` RDP byte,
-  `OBL_LAUNCH`) is identical; the G4 loader is byte-for-byte the same blob as
-  G0. The G0/G4 loader read-modify-writes only the RDP byte in `OPTR`, so all
-  other user option bits (BOR, watchdog, nBOOT, dual-bank, etc.) are preserved.
+- **G4 == G0 == U0 == L4** — the flash IP (base, register offsets, keys, `OPTR`
+  RDP byte, `OBL_LAUNCH`) is identical; the G4/U0/L4 loaders are byte-for-byte
+  the same blob as G0. The loader read-modify-writes only the RDP byte in
+  `OPTR`, so all other user option bits (BOR, watchdog, nBOOT, dual-bank, etc.)
+  are preserved.
+- **F0 == F1 flash IP** (the older FPEC controller) but uses the modern
+  `0xAA`/`0xBB`/`0xCC` 3-level RDP byte scheme. Unlike F1, the F0 RDP byte is
+  flipped from a flashloader (more robust under Level 1). The loader erases the
+  option bytes and programs the RDP halfword at `0x1FFFF800` (the FPEC computes
+  the complement automatically). **Unlike F1, the F0 FPEC has an
+  `FLASH_CR.OBL_LAUNCH` bit (bit 13)** — and it is required: on F0 a plain
+  `nRST` / system reset does **not** reload the option bytes (only a power-on
+  reset or `OBL_LAUNCH` does), so the loader sets `OBL_LAUNCH` itself to reload
+  + self-reset. The active level is read back from `FLASH_OBR` `RDPRT1`/`RDPRT2`.
 
-RDP byte values are common to all four: `0xAA` = Level 0, `0xCC` = Level 2,
-any other value (`0xBB` used here) = Level 1. In every case `Level 1 -> Level 0`
-triggers a target flash mass erase and uses a reconnect-under-reset at very low
-SWD speed before running the loader.
+RDP byte values are common to the modern families: `0xAA` = Level 0,
+`0xCC` = Level 2, any other value (`0xBB` used here) = Level 1. In every case
+`Level 1 -> Level 0` triggers a target flash mass erase and uses a
+reconnect-under-reset at very low SWD speed before running the loader.
 
 > Loader SRAM usage: code @ `0x20000000`, parameter @ `0x20000100`, stack top
 > `0x20002000`. The target therefore needs at least ~8 KB of SRAM (true for all
-> G0/G4/L1/L0 parts that support RDP unlock).
+> G0/G4/U0/L4/L1/L0 parts that support RDP unlock). The F0 loaders are
+> stackless straight-line code, but they still place the parameter at
+> `0x20000100`; on very small STM32F0 parts (4 KB SRAM) lower the stack top in
+> the matching `*_ob_loader.ld` / blob if you adapt them.
 
 ## Implementation Notes
 
@@ -268,5 +296,5 @@ Validated behaviors:
 
 - SWD connect
 - Flash read from `0x08000000`
-- RDP Level 0 -> Level 1 (F1 / L0 / L1 / G0 / G4)
-- RDP Level 1 -> Level 0 (F1 / L0 / L1 / G0 / G4)
+- RDP Level 0 -> Level 1 (F1 / L0 / L1 / G0 / G4 / F0 / U0 / L4)
+- RDP Level 1 -> Level 0 (F1 / L0 / L1 / G0 / G4 / F0 / U0 / L4)

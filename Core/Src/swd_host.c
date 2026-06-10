@@ -3,6 +3,9 @@
 #include "l1_ob_loader_blob.h"
 #include "g0_ob_loader_blob.h"
 #include "g4_ob_loader_blob.h"
+#include "f0_ob_loader_blob.h"
+#include "u0_ob_loader_blob.h"
+#include "l4_ob_loader_blob.h"
 
 #define SWD_TURNAROUND_CYCLES                1U
 #define SWD_LINE_RESET_CYCLES                60U
@@ -184,6 +187,56 @@
 #define STM32G4_OB_RDP_LEVEL2_BYTE           0xCCU
 #define STM32G4_RDP_LEVEL1_TO_0_RELEASE_DELAY_MS   2000U
 
+/*
+ * STM32F0 flash interface. The F0 uses the older FPEC flash controller — the
+ * same IP as the STM32F1 (register base 0x40022000, KEYR/OPTKEYR/SR/CR/OBR at
+ * the F1 offsets, the same unlock keys, SR.BSY = bit 0, halfword option-byte
+ * programming at 0x1FFFF800). It differs from F1 in two ways: the RDP byte
+ * uses the modern 3-level scheme (0xAA = L0, 0xCC = L2, anything else = L1)
+ * read back from OBR RDPRT1/RDPRT2, and the F0 FPEC HAS an FLASH_CR.OBL_LAUNCH
+ * bit (bit 13) that F1 lacks. Like the L0/G0 families, RDP cannot be flipped
+ * over the debug MEM-AP under Level 1, so it is done by the on-target mini
+ * flashloader (see f0_ob_loader_blob.h). The loader itself sets OBL_LAUNCH to
+ * reload the option bytes: a plain NRST / system reset does NOT reload them on
+ * F0 (only a power-on reset or OBL_LAUNCH does), so relying on an nRST pulse
+ * here would require a manual power cycle for the new RDP level to apply.
+ */
+#define STM32F0_FLASH_OBR                    0x4002201CUL
+#define STM32F0_OBR_RDPRT1                   (1UL << 1)
+#define STM32F0_OBR_RDPRT2                   (1UL << 2)
+#define STM32F0_OB_RDP_LEVEL0_BYTE           0xAAU
+#define STM32F0_OB_RDP_LEVEL1_BYTE           0xBBU
+#define STM32F0_OB_RDP_LEVEL2_BYTE           0xCCU
+#define STM32F0_RDP_LEVEL1_TO_0_RELEASE_DELAY_MS   2000U
+
+/*
+ * STM32U0 flash interface. The U0 uses the newer flash controller shared with
+ * G0/G4/L4 — the register base (0x40022000), the KEYR/OPTKEYR/SR/CR/OPTR
+ * offsets, the unlock keys, SR.BSY = bit 16, the OPTR[7:0] RDP byte, and the
+ * OPTSTRT/OBL_LAUNCH commit sequence are all identical to the G0. RDP is
+ * flipped by the on-target mini flashloader (see u0_ob_loader_blob.h).
+ */
+#define STM32U0_FLASH_OPTR                   0x40022020UL
+#define STM32U0_OPTR_RDP_MASK                0x000000FFUL
+#define STM32U0_OB_RDP_LEVEL0_BYTE           0xAAU
+#define STM32U0_OB_RDP_LEVEL1_BYTE           0xBBU
+#define STM32U0_OB_RDP_LEVEL2_BYTE           0xCCU
+#define STM32U0_RDP_LEVEL1_TO_0_RELEASE_DELAY_MS   2000U
+
+/*
+ * STM32L4 flash interface. The flash IP is identical to the STM32G4/G0 one
+ * (same base 0x40022000, same register offsets, keys, bit positions, and
+ * OPTR[7:0] RDP encoding). As with G4, the host only needs OPTR here; the
+ * loader-driving registers live inside the on-target flashloader (see
+ * l4_ob_loader_blob.h).
+ */
+#define STM32L4_FLASH_OPTR                   0x40022020UL
+#define STM32L4_OPTR_RDP_MASK                0x000000FFUL
+#define STM32L4_OB_RDP_LEVEL0_BYTE           0xAAU
+#define STM32L4_OB_RDP_LEVEL1_BYTE           0xBBU
+#define STM32L4_OB_RDP_LEVEL2_BYTE           0xCCU
+#define STM32L4_RDP_LEVEL1_TO_0_RELEASE_DELAY_MS   2000U
+
 typedef struct
 {
   swd_host_speed_t speed;
@@ -260,6 +313,15 @@ static swd_host_status_t stm32l1_run_ob_loader(uint32_t ob_word_value);
 static swd_host_status_t stm32g4_reconnect_for_level1_access(void);
 static uint8_t stm32g4_get_rdp_byte(stm32g4_rdp_level_t level);
 static swd_host_status_t stm32g4_run_ob_loader(uint32_t rdp_byte_value);
+static swd_host_status_t stm32f0_reconnect_for_level1_access(void);
+static uint8_t stm32f0_get_rdp_byte(stm32f0_rdp_level_t level);
+static swd_host_status_t stm32f0_run_ob_loader(uint32_t rdp_byte_value);
+static swd_host_status_t stm32u0_reconnect_for_level1_access(void);
+static uint8_t stm32u0_get_rdp_byte(stm32u0_rdp_level_t level);
+static swd_host_status_t stm32u0_run_ob_loader(uint32_t rdp_byte_value);
+static swd_host_status_t stm32l4_reconnect_for_level1_access(void);
+static uint8_t stm32l4_get_rdp_byte(stm32l4_rdp_level_t level);
+static swd_host_status_t stm32l4_run_ob_loader(uint32_t rdp_byte_value);
 static uint32_t swd_get_half_period_delay_cycles(void);
 static uint8_t swd_is_valid_speed(swd_host_speed_t speed);
 static uint8_t swd_is_valid_connect_mode(swd_host_connect_mode_t connect_mode);
@@ -1523,6 +1585,337 @@ static swd_host_status_t stm32g4_run_ob_loader(uint32_t rdp_byte_value)
   }
 }
 
+static swd_host_status_t stm32f0_reconnect_for_level1_access(void)
+{
+  swd_host_config_t saved_config = g_swd_host_config;
+  swd_host_status_t status;
+
+  g_swd_host_config.connect_mode = SWD_HOST_CONNECT_UNDER_RESET;
+  g_swd_host_config.speed = SWD_HOST_SPEED_VERY_LOW;
+
+  status = swd_host_connect();
+
+  g_swd_host_config = saved_config;
+  return status;
+}
+
+static uint8_t stm32f0_get_rdp_byte(stm32f0_rdp_level_t level)
+{
+  if (level == STM32F0_RDP_LEVEL_0)
+  {
+    return STM32F0_OB_RDP_LEVEL0_BYTE;
+  }
+
+  if (level == STM32F0_RDP_LEVEL_2)
+  {
+    return STM32F0_OB_RDP_LEVEL2_BYTE;
+  }
+
+  return STM32F0_OB_RDP_LEVEL1_BYTE;
+}
+
+/*
+ * Run the embedded STM32F0 mini flashloader on the target. The flashloader is
+ * the Thumb binary in f0_ob_loader_blob[] (built from flashloader/f0_ob_loader.c).
+ * It runs on the F0 CPU itself, which lets it write KEYR / OPTKEYR / the option
+ * bytes as the native bus master — these writes are accepted under RDP Level 1,
+ * unlike MEM-AP debug-master writes.
+ *
+ * The loader erases the option bytes, programs the RDP halfword, then sets
+ * FLASH_CR.OBL_LAUNCH to reload the option bytes and self-reset (a plain nRST
+ * would not reload them on F0 — only POR or OBL_LAUNCH does). The wait below
+ * therefore succeeds on either the OBL_LAUNCH-induced SWD break or the loader
+ * BKPT, exactly like the G0 path. The DHCSR halt / core-register helpers are
+ * target-agnostic ARM debug operations, so they are shared with the L0 path.
+ */
+static swd_host_status_t stm32f0_run_ob_loader(uint32_t rdp_byte_value)
+{
+  uint32_t offset;
+  uint32_t word;
+  uint32_t tickstart;
+  uint32_t dhcsr;
+
+  /* 1. halt the target CPU */
+  if (stm32l0_cpu_halt(100U) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  /* 2. upload the loader binary, 4 bytes at a time, little-endian */
+  for (offset = 0U; offset < F0_OB_LOADER_BLOB_SIZE; offset += 4U)
+  {
+    word =  (uint32_t)f0_ob_loader_blob[offset]
+         | ((uint32_t)f0_ob_loader_blob[offset + 1U] << 8)
+         | ((uint32_t)f0_ob_loader_blob[offset + 2U] << 16)
+         | ((uint32_t)f0_ob_loader_blob[offset + 3U] << 24);
+
+    if (swd_host_write_u32(F0_OB_LOADER_LOAD_ADDRESS + offset, word) != SWD_HOST_OK)
+    {
+      return SWD_HOST_ERROR;
+    }
+  }
+
+  /* 3. parameter: the desired RDP byte the loader writes to the OB halfword */
+  if (swd_host_write_u32(F0_OB_LOADER_PARAM_ADDRESS, rdp_byte_value & 0xFFUL) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  /* 4. set SP, PC, xPSR.T so the core resumes at the loader entry in Thumb mode */
+  if (stm32l0_write_core_register(ARM_CORE_REG_SP, F0_OB_LOADER_STACK_TOP) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+  if (stm32l0_write_core_register(ARM_CORE_REG_PC, F0_OB_LOADER_ENTRY_ADDRESS) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+  if (stm32l0_write_core_register(ARM_CORE_REG_XPSR, ARM_XPSR_THUMB) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  /* 5. release C_HALT to let the loader run */
+  if (swd_host_write_u32(ARM_DHCSR,
+                         ARM_DHCSR_DBGKEY | ARM_DHCSR_C_DEBUGEN) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  /* 6. wait for OBL_LAUNCH-induced reset (SWD breaks) or loader BKPT (S_HALT) */
+  tickstart = HAL_GetTick();
+  for (;;)
+  {
+    if (swd_host_read_u32(ARM_DHCSR, &dhcsr) != SWD_HOST_OK)
+    {
+      return SWD_HOST_OK;
+    }
+    if ((dhcsr & ARM_DHCSR_S_HALT) != 0U)
+    {
+      return SWD_HOST_OK;
+    }
+    if ((HAL_GetTick() - tickstart) > 500U)
+    {
+      return SWD_HOST_TIMEOUT;
+    }
+  }
+}
+
+static swd_host_status_t stm32u0_reconnect_for_level1_access(void)
+{
+  swd_host_config_t saved_config = g_swd_host_config;
+  swd_host_status_t status;
+
+  g_swd_host_config.connect_mode = SWD_HOST_CONNECT_UNDER_RESET;
+  g_swd_host_config.speed = SWD_HOST_SPEED_VERY_LOW;
+
+  status = swd_host_connect();
+
+  g_swd_host_config = saved_config;
+  return status;
+}
+
+static uint8_t stm32u0_get_rdp_byte(stm32u0_rdp_level_t level)
+{
+  if (level == STM32U0_RDP_LEVEL_0)
+  {
+    return STM32U0_OB_RDP_LEVEL0_BYTE;
+  }
+
+  if (level == STM32U0_RDP_LEVEL_2)
+  {
+    return STM32U0_OB_RDP_LEVEL2_BYTE;
+  }
+
+  return STM32U0_OB_RDP_LEVEL1_BYTE;
+}
+
+/*
+ * Run the embedded STM32U0 mini flashloader on the target. Identical in flow to
+ * stm32g0_run_ob_loader() (the flash IP is the same); only the loader payload
+ * differs. The loader read-modify-writes only the RDP byte in OPTR, then
+ * triggers OBL_LAUNCH which resets the chip.
+ */
+static swd_host_status_t stm32u0_run_ob_loader(uint32_t rdp_byte_value)
+{
+  uint32_t offset;
+  uint32_t word;
+  uint32_t tickstart;
+  uint32_t dhcsr;
+
+  /* 1. halt the target CPU */
+  if (stm32l0_cpu_halt(100U) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  /* 2. upload the loader binary, 4 bytes at a time, little-endian */
+  for (offset = 0U; offset < U0_OB_LOADER_BLOB_SIZE; offset += 4U)
+  {
+    word =  (uint32_t)u0_ob_loader_blob[offset]
+         | ((uint32_t)u0_ob_loader_blob[offset + 1U] << 8)
+         | ((uint32_t)u0_ob_loader_blob[offset + 2U] << 16)
+         | ((uint32_t)u0_ob_loader_blob[offset + 3U] << 24);
+
+    if (swd_host_write_u32(U0_OB_LOADER_LOAD_ADDRESS + offset, word) != SWD_HOST_OK)
+    {
+      return SWD_HOST_ERROR;
+    }
+  }
+
+  /* 3. parameter: the desired RDP byte the loader merges into OPTR[7:0] */
+  if (swd_host_write_u32(U0_OB_LOADER_PARAM_ADDRESS, rdp_byte_value & STM32U0_OPTR_RDP_MASK) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  /* 4. set SP, PC, xPSR.T so the core resumes at the loader entry in Thumb mode */
+  if (stm32l0_write_core_register(ARM_CORE_REG_SP, U0_OB_LOADER_STACK_TOP) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+  if (stm32l0_write_core_register(ARM_CORE_REG_PC, U0_OB_LOADER_ENTRY_ADDRESS) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+  if (stm32l0_write_core_register(ARM_CORE_REG_XPSR, ARM_XPSR_THUMB) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  /* 5. release C_HALT to let the loader run */
+  if (swd_host_write_u32(ARM_DHCSR,
+                         ARM_DHCSR_DBGKEY | ARM_DHCSR_C_DEBUGEN) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  /* 6. wait for OBL_LAUNCH-induced reset (SWD breaks) or loader BKPT (S_HALT) */
+  tickstart = HAL_GetTick();
+  for (;;)
+  {
+    if (swd_host_read_u32(ARM_DHCSR, &dhcsr) != SWD_HOST_OK)
+    {
+      return SWD_HOST_OK;
+    }
+    if ((dhcsr & ARM_DHCSR_S_HALT) != 0U)
+    {
+      return SWD_HOST_OK;
+    }
+    if ((HAL_GetTick() - tickstart) > 500U)
+    {
+      return SWD_HOST_TIMEOUT;
+    }
+  }
+}
+
+static swd_host_status_t stm32l4_reconnect_for_level1_access(void)
+{
+  swd_host_config_t saved_config = g_swd_host_config;
+  swd_host_status_t status;
+
+  g_swd_host_config.connect_mode = SWD_HOST_CONNECT_UNDER_RESET;
+  g_swd_host_config.speed = SWD_HOST_SPEED_VERY_LOW;
+
+  status = swd_host_connect();
+
+  g_swd_host_config = saved_config;
+  return status;
+}
+
+static uint8_t stm32l4_get_rdp_byte(stm32l4_rdp_level_t level)
+{
+  if (level == STM32L4_RDP_LEVEL_0)
+  {
+    return STM32L4_OB_RDP_LEVEL0_BYTE;
+  }
+
+  if (level == STM32L4_RDP_LEVEL_2)
+  {
+    return STM32L4_OB_RDP_LEVEL2_BYTE;
+  }
+
+  return STM32L4_OB_RDP_LEVEL1_BYTE;
+}
+
+/*
+ * Run the embedded STM32L4 mini flashloader on the target. Identical in flow to
+ * stm32g4_run_ob_loader() (the flash IP is the same); only the loader payload
+ * differs. Does a read-modify-write of the RDP byte in OPTR, then OBL_LAUNCH.
+ */
+static swd_host_status_t stm32l4_run_ob_loader(uint32_t rdp_byte_value)
+{
+  uint32_t offset;
+  uint32_t word;
+  uint32_t tickstart;
+  uint32_t dhcsr;
+
+  /* 1. halt the target CPU */
+  if (stm32l0_cpu_halt(100U) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  /* 2. upload the loader binary, 4 bytes at a time, little-endian */
+  for (offset = 0U; offset < L4_OB_LOADER_BLOB_SIZE; offset += 4U)
+  {
+    word =  (uint32_t)l4_ob_loader_blob[offset]
+         | ((uint32_t)l4_ob_loader_blob[offset + 1U] << 8)
+         | ((uint32_t)l4_ob_loader_blob[offset + 2U] << 16)
+         | ((uint32_t)l4_ob_loader_blob[offset + 3U] << 24);
+
+    if (swd_host_write_u32(L4_OB_LOADER_LOAD_ADDRESS + offset, word) != SWD_HOST_OK)
+    {
+      return SWD_HOST_ERROR;
+    }
+  }
+
+  /* 3. parameter: the desired RDP byte the loader merges into OPTR[7:0] */
+  if (swd_host_write_u32(L4_OB_LOADER_PARAM_ADDRESS, rdp_byte_value & STM32L4_OPTR_RDP_MASK) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  /* 4. set SP, PC, xPSR.T so the core resumes at the loader entry in Thumb mode */
+  if (stm32l0_write_core_register(ARM_CORE_REG_SP, L4_OB_LOADER_STACK_TOP) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+  if (stm32l0_write_core_register(ARM_CORE_REG_PC, L4_OB_LOADER_ENTRY_ADDRESS) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+  if (stm32l0_write_core_register(ARM_CORE_REG_XPSR, ARM_XPSR_THUMB) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  /* 5. release C_HALT to let the loader run */
+  if (swd_host_write_u32(ARM_DHCSR,
+                         ARM_DHCSR_DBGKEY | ARM_DHCSR_C_DEBUGEN) != SWD_HOST_OK)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  /* 6. wait for OBL_LAUNCH-induced reset (SWD breaks) or loader BKPT (S_HALT) */
+  tickstart = HAL_GetTick();
+  for (;;)
+  {
+    if (swd_host_read_u32(ARM_DHCSR, &dhcsr) != SWD_HOST_OK)
+    {
+      return SWD_HOST_OK;
+    }
+    if ((dhcsr & ARM_DHCSR_S_HALT) != 0U)
+    {
+      return SWD_HOST_OK;
+    }
+    if ((HAL_GetTick() - tickstart) > 500U)
+    {
+      return SWD_HOST_TIMEOUT;
+    }
+  }
+}
+
 swd_host_status_t swd_host_init(void)
 {
   return swd_host_init_with_config(NULL);
@@ -2514,6 +2907,374 @@ swd_host_status_t stm32g4_set_rdp_level(stm32g4_rdp_level_t level)
   }
 
   settle_ms = (level == STM32G4_RDP_LEVEL_0) ? STM32G4_RDP_LEVEL1_TO_0_RELEASE_DELAY_MS : 100U;
+  HAL_Delay(settle_ms);
+  swd_host_disconnect();
+  return SWD_HOST_OK;
+}
+
+swd_host_status_t stm32f0_read_u32(uint32_t address, uint32_t *value)
+{
+  swd_host_status_t status = swd_host_connect();
+
+  if (status != SWD_HOST_OK)
+  {
+    return status;
+  }
+
+  return swd_host_read_u32(address, value);
+}
+
+swd_host_status_t stm32f0_write_u32(uint32_t address, uint32_t value)
+{
+  swd_host_status_t status = swd_host_connect();
+
+  if (status != SWD_HOST_OK)
+  {
+    return status;
+  }
+
+  return swd_host_write_u32(address, value);
+}
+
+swd_host_status_t stm32f0_get_rdp_level(stm32f0_rdp_level_t *level)
+{
+  uint32_t obr;
+  swd_host_status_t status;
+
+  if (level == NULL)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  status = swd_host_connect();
+  if (status != SWD_HOST_OK)
+  {
+    return status;
+  }
+
+  /*
+   * Read the active RDP level from FLASH_OBR (0x4002201C) — the loaded option
+   * latches, i.e. the ground truth, exactly like the L0/G0 paths. The RDP
+   * level is encoded by the RDPRT1/RDPRT2 bits (not a byte): RDPRT2 -> Level 2,
+   * RDPRT1 -> Level 1, neither -> Level 0. If OBR is unreadable the SWD
+   * connection lost AP access under protection, so report Level 1 to drive the
+   * L1 -> L0 recovery flow.
+   */
+  status = swd_host_read_u32(STM32F0_FLASH_OBR, &obr);
+  if (status != SWD_HOST_OK)
+  {
+    *level = STM32F0_RDP_LEVEL_1;
+    return SWD_HOST_OK;
+  }
+
+  if ((obr & STM32F0_OBR_RDPRT2) != 0U)
+  {
+    *level = STM32F0_RDP_LEVEL_2;
+  }
+  else if ((obr & STM32F0_OBR_RDPRT1) != 0U)
+  {
+    *level = STM32F0_RDP_LEVEL_1;
+  }
+  else
+  {
+    *level = STM32F0_RDP_LEVEL_0;
+  }
+
+  return SWD_HOST_OK;
+}
+
+swd_host_status_t stm32f0_set_rdp_level(stm32f0_rdp_level_t level)
+{
+  swd_host_status_t status;
+  stm32f0_rdp_level_t current_level;
+  uint8_t rdp_byte;
+  uint32_t settle_ms;
+
+  status = stm32f0_get_rdp_level(&current_level);
+  if (status != SWD_HOST_OK)
+  {
+    return status;
+  }
+
+  if (current_level == level)
+  {
+    return SWD_HOST_OK;
+  }
+
+  if (level == STM32F0_RDP_LEVEL_2)
+  {
+    return SWD_HOST_TARGET_LOCKED;
+  }
+
+  if (current_level == STM32F0_RDP_LEVEL_1)
+  {
+    status = stm32f0_reconnect_for_level1_access();
+    if (status != SWD_HOST_OK)
+    {
+      return status;
+    }
+  }
+
+  /*
+   * Run the embedded mini flashloader on the target. It erases the option
+   * bytes, programs the new RDP byte, and sets FLASH_CR.OBL_LAUNCH from the F0
+   * CPU itself (native bus master) to reload the option bytes and self-reset.
+   * Using OBL_LAUNCH is required on F0: a plain nRST would leave the new RDP
+   * level unapplied until a manual power-on reset.
+   */
+  rdp_byte = stm32f0_get_rdp_byte(level);
+  status = stm32f0_run_ob_loader((uint32_t)rdp_byte);
+  if (status != SWD_HOST_OK)
+  {
+    return status;
+  }
+
+  /*
+   * OBL_LAUNCH already triggered the chip's internal reset and OB reload. Wait
+   * long enough for it to complete. A Level 1 -> Level 0 regression additionally
+   * mass-erases user flash, so allow significantly more time there.
+   */
+  settle_ms = (level == STM32F0_RDP_LEVEL_0) ? STM32F0_RDP_LEVEL1_TO_0_RELEASE_DELAY_MS : 100U;
+  HAL_Delay(settle_ms);
+  swd_host_disconnect();
+  return SWD_HOST_OK;
+}
+
+swd_host_status_t stm32u0_read_u32(uint32_t address, uint32_t *value)
+{
+  swd_host_status_t status = swd_host_connect();
+
+  if (status != SWD_HOST_OK)
+  {
+    return status;
+  }
+
+  return swd_host_read_u32(address, value);
+}
+
+swd_host_status_t stm32u0_write_u32(uint32_t address, uint32_t value)
+{
+  swd_host_status_t status = swd_host_connect();
+
+  if (status != SWD_HOST_OK)
+  {
+    return status;
+  }
+
+  return swd_host_write_u32(address, value);
+}
+
+swd_host_status_t stm32u0_get_rdp_level(stm32u0_rdp_level_t *level)
+{
+  uint32_t optr;
+  uint8_t rdp_byte;
+  swd_host_status_t status;
+
+  if (level == NULL)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  status = swd_host_connect();
+  if (status != SWD_HOST_OK)
+  {
+    return status;
+  }
+
+  /*
+   * The active RDP level is OPTR[7:0] (0x40022020), identical to G0. If OPTR
+   * is unreadable the SWD connection lost AP access under protection, so
+   * report Level 1 to drive the L1 -> L0 recovery flow.
+   */
+  status = swd_host_read_u32(STM32U0_FLASH_OPTR, &optr);
+  if (status != SWD_HOST_OK)
+  {
+    *level = STM32U0_RDP_LEVEL_1;
+    return SWD_HOST_OK;
+  }
+
+  rdp_byte = (uint8_t)(optr & STM32U0_OPTR_RDP_MASK);
+
+  if (rdp_byte == STM32U0_OB_RDP_LEVEL0_BYTE)
+  {
+    *level = STM32U0_RDP_LEVEL_0;
+  }
+  else if (rdp_byte == STM32U0_OB_RDP_LEVEL2_BYTE)
+  {
+    *level = STM32U0_RDP_LEVEL_2;
+  }
+  else
+  {
+    *level = STM32U0_RDP_LEVEL_1;
+  }
+
+  return SWD_HOST_OK;
+}
+
+swd_host_status_t stm32u0_set_rdp_level(stm32u0_rdp_level_t level)
+{
+  swd_host_status_t status;
+  stm32u0_rdp_level_t current_level;
+  uint8_t rdp_byte;
+  uint32_t settle_ms;
+
+  status = stm32u0_get_rdp_level(&current_level);
+  if (status != SWD_HOST_OK)
+  {
+    return status;
+  }
+
+  if (current_level == level)
+  {
+    return SWD_HOST_OK;
+  }
+
+  if (level == STM32U0_RDP_LEVEL_2)
+  {
+    return SWD_HOST_TARGET_LOCKED;
+  }
+
+  if (current_level == STM32U0_RDP_LEVEL_1)
+  {
+    status = stm32u0_reconnect_for_level1_access();
+    if (status != SWD_HOST_OK)
+    {
+      return status;
+    }
+  }
+
+  /*
+   * Run the embedded mini flashloader on the target (same flow as G0). Only
+   * the RDP byte in OPTR is changed; all other option bits are preserved.
+   */
+  rdp_byte = stm32u0_get_rdp_byte(level);
+  status = stm32u0_run_ob_loader((uint32_t)rdp_byte);
+  if (status != SWD_HOST_OK)
+  {
+    return status;
+  }
+
+  settle_ms = (level == STM32U0_RDP_LEVEL_0) ? STM32U0_RDP_LEVEL1_TO_0_RELEASE_DELAY_MS : 100U;
+  HAL_Delay(settle_ms);
+  swd_host_disconnect();
+  return SWD_HOST_OK;
+}
+
+swd_host_status_t stm32l4_read_u32(uint32_t address, uint32_t *value)
+{
+  swd_host_status_t status = swd_host_connect();
+
+  if (status != SWD_HOST_OK)
+  {
+    return status;
+  }
+
+  return swd_host_read_u32(address, value);
+}
+
+swd_host_status_t stm32l4_write_u32(uint32_t address, uint32_t value)
+{
+  swd_host_status_t status = swd_host_connect();
+
+  if (status != SWD_HOST_OK)
+  {
+    return status;
+  }
+
+  return swd_host_write_u32(address, value);
+}
+
+swd_host_status_t stm32l4_get_rdp_level(stm32l4_rdp_level_t *level)
+{
+  uint32_t optr;
+  uint8_t rdp_byte;
+  swd_host_status_t status;
+
+  if (level == NULL)
+  {
+    return SWD_HOST_ERROR;
+  }
+
+  status = swd_host_connect();
+  if (status != SWD_HOST_OK)
+  {
+    return status;
+  }
+
+  /*
+   * The active RDP level is OPTR[7:0] (0x40022020), identical to G0/G4. If
+   * OPTR is unreadable the SWD connection lost AP access under protection, so
+   * report Level 1 to drive the L1 -> L0 recovery flow.
+   */
+  status = swd_host_read_u32(STM32L4_FLASH_OPTR, &optr);
+  if (status != SWD_HOST_OK)
+  {
+    *level = STM32L4_RDP_LEVEL_1;
+    return SWD_HOST_OK;
+  }
+
+  rdp_byte = (uint8_t)(optr & STM32L4_OPTR_RDP_MASK);
+
+  if (rdp_byte == STM32L4_OB_RDP_LEVEL0_BYTE)
+  {
+    *level = STM32L4_RDP_LEVEL_0;
+  }
+  else if (rdp_byte == STM32L4_OB_RDP_LEVEL2_BYTE)
+  {
+    *level = STM32L4_RDP_LEVEL_2;
+  }
+  else
+  {
+    *level = STM32L4_RDP_LEVEL_1;
+  }
+
+  return SWD_HOST_OK;
+}
+
+swd_host_status_t stm32l4_set_rdp_level(stm32l4_rdp_level_t level)
+{
+  swd_host_status_t status;
+  stm32l4_rdp_level_t current_level;
+  uint8_t rdp_byte;
+  uint32_t settle_ms;
+
+  status = stm32l4_get_rdp_level(&current_level);
+  if (status != SWD_HOST_OK)
+  {
+    return status;
+  }
+
+  if (current_level == level)
+  {
+    return SWD_HOST_OK;
+  }
+
+  if (level == STM32L4_RDP_LEVEL_2)
+  {
+    return SWD_HOST_TARGET_LOCKED;
+  }
+
+  if (current_level == STM32L4_RDP_LEVEL_1)
+  {
+    status = stm32l4_reconnect_for_level1_access();
+    if (status != SWD_HOST_OK)
+    {
+      return status;
+    }
+  }
+
+  /*
+   * Run the embedded mini flashloader on the target (same flow as G4). Only
+   * the RDP byte in OPTR is changed; all other option bits are preserved.
+   */
+  rdp_byte = stm32l4_get_rdp_byte(level);
+  status = stm32l4_run_ob_loader((uint32_t)rdp_byte);
+  if (status != SWD_HOST_OK)
+  {
+    return status;
+  }
+
+  settle_ms = (level == STM32L4_RDP_LEVEL_0) ? STM32L4_RDP_LEVEL1_TO_0_RELEASE_DELAY_MS : 100U;
   HAL_Delay(settle_ms);
   swd_host_disconnect();
   return SWD_HOST_OK;

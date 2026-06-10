@@ -9,6 +9,9 @@ REM   build\l0_ob_loader.elf / .bin / .dis   + ..\Core\Inc\l0_ob_loader_blob.h
 REM   build\l1_ob_loader.elf / .bin / .dis   + ..\Core\Inc\l1_ob_loader_blob.h
 REM   build\g0_ob_loader.elf / .bin / .dis   + ..\Core\Inc\g0_ob_loader_blob.h
 REM   build\g4_ob_loader.elf / .bin / .dis   + ..\Core\Inc\g4_ob_loader_blob.h
+REM   build\f0_ob_loader.elf / .bin / .dis   + ..\Core\Inc\f0_ob_loader_blob.h
+REM   build\u0_ob_loader.elf / .bin / .dis   + ..\Core\Inc\u0_ob_loader_blob.h
+REM   build\l4_ob_loader.elf / .bin / .dis   + ..\Core\Inc\l4_ob_loader_blob.h
 REM   (all *_blob.h are consumed by swd_host.c)
 
 setlocal
@@ -108,12 +111,78 @@ if errorlevel 1 exit /b 1
 py emit_blob_header.py build\g4_ob_loader.bin ..\Core\Inc\g4_ob_loader_blob.h g4_ob_loader_blob G4_OB_LOADER
 if errorlevel 1 exit /b 1
 
+REM ----- STM32F0 loader (Cortex-M0) — FPEC controller, like STM32F1 -----
+"%GCC%" ^
+  -mcpu=cortex-m0 -mthumb ^
+  -nostdlib -nostartfiles -ffreestanding ^
+  -fno-builtin -fno-common ^
+  -Os -fno-toplevel-reorder ^
+  -Wall -Wextra ^
+  -T f0_ob_loader.ld ^
+  -Wl,--build-id=none -Wl,-Map=build\f0_ob_loader.map ^
+  -o build\f0_ob_loader.elf f0_ob_loader.c
+if errorlevel 1 exit /b 1
+
+"%OBJCOPY%" -O binary build\f0_ob_loader.elf build\f0_ob_loader.bin
+if errorlevel 1 exit /b 1
+
+"%OBJDUMP%" -d build\f0_ob_loader.elf > build\f0_ob_loader.dis
+if errorlevel 1 exit /b 1
+
+py emit_blob_header.py build\f0_ob_loader.bin ..\Core\Inc\f0_ob_loader_blob.h f0_ob_loader_blob F0_OB_LOADER
+if errorlevel 1 exit /b 1
+
+REM ----- STM32U0 loader (Cortex-M0+) — G0/G4/L4-style controller -----
+"%GCC%" ^
+  -mcpu=cortex-m0plus -mthumb ^
+  -nostdlib -nostartfiles -ffreestanding ^
+  -fno-builtin -fno-common ^
+  -Os -fno-toplevel-reorder ^
+  -Wall -Wextra ^
+  -T u0_ob_loader.ld ^
+  -Wl,--build-id=none -Wl,-Map=build\u0_ob_loader.map ^
+  -o build\u0_ob_loader.elf u0_ob_loader.c
+if errorlevel 1 exit /b 1
+
+"%OBJCOPY%" -O binary build\u0_ob_loader.elf build\u0_ob_loader.bin
+if errorlevel 1 exit /b 1
+
+"%OBJDUMP%" -d build\u0_ob_loader.elf > build\u0_ob_loader.dis
+if errorlevel 1 exit /b 1
+
+py emit_blob_header.py build\u0_ob_loader.bin ..\Core\Inc\u0_ob_loader_blob.h u0_ob_loader_blob U0_OB_LOADER
+if errorlevel 1 exit /b 1
+
+REM ----- STM32L4 loader (Cortex-M4) — built as M0+ subset, runs on M4 -----
+"%GCC%" ^
+  -mcpu=cortex-m0plus -mthumb ^
+  -nostdlib -nostartfiles -ffreestanding ^
+  -fno-builtin -fno-common ^
+  -Os -fno-toplevel-reorder ^
+  -Wall -Wextra ^
+  -T l4_ob_loader.ld ^
+  -Wl,--build-id=none -Wl,-Map=build\l4_ob_loader.map ^
+  -o build\l4_ob_loader.elf l4_ob_loader.c
+if errorlevel 1 exit /b 1
+
+"%OBJCOPY%" -O binary build\l4_ob_loader.elf build\l4_ob_loader.bin
+if errorlevel 1 exit /b 1
+
+"%OBJDUMP%" -d build\l4_ob_loader.elf > build\l4_ob_loader.dis
+if errorlevel 1 exit /b 1
+
+py emit_blob_header.py build\l4_ob_loader.bin ..\Core\Inc\l4_ob_loader_blob.h l4_ob_loader_blob L4_OB_LOADER
+if errorlevel 1 exit /b 1
+
 echo.
 echo === Built loaders ===
 for %%I in (build\l0_ob_loader.bin) do echo L0 size: %%~zI bytes
 for %%I in (build\l1_ob_loader.bin) do echo L1 size: %%~zI bytes
 for %%I in (build\g0_ob_loader.bin) do echo G0 size: %%~zI bytes
 for %%I in (build\g4_ob_loader.bin) do echo G4 size: %%~zI bytes
-echo Headers in ..\Core\Inc\: l0_ob_loader_blob.h l1_ob_loader_blob.h g0_ob_loader_blob.h g4_ob_loader_blob.h
+for %%I in (build\f0_ob_loader.bin) do echo F0 size: %%~zI bytes
+for %%I in (build\u0_ob_loader.bin) do echo U0 size: %%~zI bytes
+for %%I in (build\l4_ob_loader.bin) do echo L4 size: %%~zI bytes
+echo Headers in ..\Core\Inc\: l0_ob_loader_blob.h l1_ob_loader_blob.h g0_ob_loader_blob.h g4_ob_loader_blob.h f0_ob_loader_blob.h u0_ob_loader_blob.h l4_ob_loader_blob.h
 
 endlocal
